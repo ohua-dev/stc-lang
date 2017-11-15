@@ -1,0 +1,51 @@
+name:                statefulness
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://bitbucket.org/nrink/statefulness#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Norman Rink, Sebastian Ertel
+maintainer:          example@example.com
+copyright:           2017 Norman Rink, Sebastian Ertel
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Statefulness
+  -- Statefulness -> did not manage to integrate this properly into build process
+  build-depends:       base >= 4.7 && < 5
+  default-language:    Haskell2010
+  include-dirs:        cbits
+  includes:            cbits/my_state.h
+  install-includes:    cbits/my_state.h
+  c-sources:           cbits/test.c
+  extra-lib-dirs:      /Users/sertel/sandbox/statefulness/cbits
+  ghc-options:         -auto-all -Wall -O2 -fPIC
+  default-extensions:  ForeignFunctionInterface
+  cc-options:          -fPIC
+  build-tools:        hsc2hs
+
+executable statefulness-exe
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , statefulness
+  default-language:    Haskell2010
+
+test-suite statefulness-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , statefulness
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://bitbucket.org/nrink/statefulness
