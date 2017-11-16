@@ -3,13 +3,14 @@
 module Statefulness (c_testfn, Result) where
 
 import Foreign
+import Foreign.C.Types
 
 #include "my_state.h"
-data Result = Result { s1 :: Int, s2 :: Int} deriving (Show)
+data Result = Result { s1 :: CInt, s2 :: CInt} deriving (Show)
 
 instance Storable Result where
     sizeOf    _ = (#size my_state)
-    alignment _ = alignment (undefined :: Int)
+    alignment _ = alignment (undefined :: CInt)
     peek ptr = do
         s1' <- (#peek my_state, s1) ptr
         s2' <- (#peek my_state, s2) ptr
