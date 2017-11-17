@@ -25,7 +25,7 @@ library
   install-includes:    cbits/my_state.h
   c-sources:           cbits/test.c
   extra-lib-dirs:      /Users/sertel/sandbox/statefulness/cbits
-  ghc-options:         -auto-all -Wall -O2 -fPIC
+  ghc-options:         -auto-all -Wall -O2 -fPIC -ddump-to-file -ddump-prep -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   default-extensions:  ForeignFunctionInterface
   cc-options:          -fPIC
   build-tools:        hsc2hs
@@ -33,7 +33,7 @@ library
 executable statefulness-exe
   hs-source-dirs:      app
   main-is:             Main.hs
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-simpl -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   build-depends:       base
                      , statefulness
                      , mtl
