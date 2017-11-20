@@ -2,8 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Simple where
 
-import qualified Control.Monad.State
-import Control.Monad.Trans.State
+import Control.Monad.State hiding (state)
+import Control.Monad.Trans.State (state)
 
 data S s = S { s1 :: s, s2 :: s, s3 :: s} deriving (Show)
 
@@ -12,14 +12,14 @@ type SF s a = a -> State (S s) a
 
 foo :: Int -> State Int Int
 foo x = do
-  s <- Control.Monad.State.get
-  Control.Monad.State.put $ s+2
+  s <- get
+  put $ s+2
   return $ x+2
 
 bar :: Int -> State Int Int
 bar x = do
-  s <- Control.Monad.State.get
-  Control.Monad.State.put $ s+3
+  s <- get
+  put $ s+3
   return $ x*3
 
 sfc1 :: forall a s.(a -> State s a) -> a -> State (S s) a
