@@ -15,10 +15,12 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Statefulness, Sfc
+  exposed-modules:     Statefulness, Sfc, SfOperations
   -- Statefulness -> did not manage to integrate this properly into build process
   build-depends:       base >= 4.7 && < 5,
-                       mtl >= 2.2.1
+                       mtl >= 2.2.1,
+                       monad-par >= 0.3.4,
+                       deepseq
   default-language:    Haskell2010
   include-dirs:        cbits
   includes:            cbits/my_state.h
@@ -37,6 +39,7 @@ executable statefulness-exe
   build-depends:       base
                      , statefulness
                      , mtl
+                     , monad-par
   default-language:    Haskell2010
 
 test-suite statefulness-test
