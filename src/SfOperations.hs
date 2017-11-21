@@ -57,103 +57,163 @@ dff input output f state = do
       P.put output $ Cons result newPendingTail
       dff input newPendingTail f state'
 
-type ParState s = s -> Par s
+-- type ParState s = s -> Par s
+--
+-- type SFb s b = StateT s Par b
+--
+-- myfork :: ParState s -> StateT s Par (StateT s Par s)
+-- myfork f = do
+--   state0 <- get
+--   ivar <- lift $ spawn $ f state0
+--   return $ get >>= \gs -> P.get ivar >>= \ls -> put $ merge ls gs
+--
+-- infixr 9 .#.
+-- -- (.#.) :: SF s b -> SF s a -> Ohua s b
+-- (.#.) :: (a -> State ls b) -> StateT s Par (IVar a) -> a -> StateT gs Par (IVar b)
+-- sf .#. sg = q where
+--   q :: a -> StateT s Par b
+--   q list@(_:_) = do
+--     state <- S.get
+--     [input,middle,output] <- lift $ sequence [new,new,new]
+--     stateUpdate1 <- myfork $ dff input middle sf
+--     stateUpdate2 <- myfork $ dff middle output sg
+--     pushInput list
+--     return $ pullOutput output []
+--       where
+--         pushInput :: [a] -> Stream a -> ()
+--         pushInput (x:xs) chan = do
+--           next <- lift $ new
+--           lift $ P.put chan $ Cons x next
+--           pushInput xs next
+--         pushInput [] chan = do
+--           lift $ P.put chan Null
+--         pullOutput :: Stream a -> [a] -> [a]
+--         pullOutput chan result = do
+--           i <- lift $ P.get chan
+--           case i of
+--             Null -> do
+--               stateUpdate1
+--               stateUpdate2
+--               result
+--             Cons e es -> pullOutput es $ result ++ [e]
+--   q x = (head . q) [x]
+--
+-- -- TODO the code for pulling and pushing data needs to go into smap and runOhua
+-- liftSf :: (a -> State s b) -> (a -> StateT s Par (IVar b))
+-- liftSf f xs = do
+--   state <- S.get
+--   [input,output] <- lift $ sequence [new,new]
+--   stateUpdate <- myfork $ dff input output f
+--   pushInput xs
+--   return $ pullOutput output []
+--     where
+--       pushInput :: [a] -> Stream a -> ()
+--       pushInput (x:xs) chan = do
+--         next <- lift $ new
+--         lift $ P.put chan $ Cons x next
+--         pushInput xs next
+--       pushInput [] chan = do
+--         lift $ P.put chan Null
+--       pullOutput :: Stream a -> [a] -> [a]
+--       pullOutput chan result = do
+--         i <- lift $ P.get chan
+--         case i of
+--           Null -> do
+--             result
+--           Cons e es -> pullOutput es $ result ++ [e]
 
-type SFb s b = StateT s Par b
+-- smap' :: StateT s Par b -> [a] -> s -> [b]
+-- smap' f x gs = runPar $ runStateT $ f x gs
 
-myfork :: ParState s -> StateT s Par (StateT s Par s)
-myfork f = do
-  state0 <- get
-  ivar <- lift $ spawn $ f state0
-  return $ get >>= \gs -> P.get ivar >>= \ls -> put $ merge ls gs
+stream :: [a] -> Par Stream a
+stream [] = do
+  i <- new
+  P.put i Null
+  return i
+stream (x:xs) = do
+  nextPtr0 <- new
+  let start = Cons x nextPtr0
+  foldM convert nextPtr0 xs where
+  convert nextPtr0' x' = do
+    nextPtr1 <- new
+    P.put nextPtr0' Cons x' nextPtr1
+    return nextPtr1
 
-infixr 9 .#.
--- (.#.) :: SF s b -> SF s a -> Ohua s b
-(.#.) :: (a -> State ls b) -> StateT s Par (IVar a) -> a -> StateT gs Par (IVar b)
-sf .#. sg = q where
-  q :: a -> StateT s Par b
-  q list@(_:_) = do
-    state <- S.get
-    [input,middle,output] <- lift $ sequence [new,new,new]
-    stateUpdate1 <- myfork $ dff input middle sf
-    stateUpdate2 <- myfork $ dff middle output sg
-    pushInput list
-    return $ pullOutput output []
-      where
-        pushInput :: [a] -> Stream a -> ()
-        pushInput (x:xs) chan = do
-          next <- lift $ new
-          lift $ P.put chan $ Cons x next
-          pushInput xs next
-        pushInput [] chan = do
-          lift $ P.put chan Null
-        pullOutput :: Stream a -> [a] -> [a]
-        pullOutput chan result = do
-          i <- lift $ P.get chan
-          case i of
-            Null -> do
-              stateUpdate1
-              stateUpdate2
-              result
-            Cons e es -> pullOutput es $ result ++ [e]
-  q x = (head . q) [x]
+collect :: Stream a -> Par [a]
+collect chan = collect' chan [] where
+  collect' c r = do
+    i <- lift $ P.get c
+    case i of
+      Null -> return r
+      Cons e es -> collect' es $ r ++ [e]
 
-liftSf :: (a -> State s b) -> (a -> StateT s Par (IVar b))
-liftSf f xs = do
-  state <- S.get
-  [input,output] <- lift $ sequence [new,new]
-  stateUpdate <- myfork $ dff input output f
-  pushInput xs
-  return $ pullOutput output []
-    where
-      pushInput :: [a] -> Stream a -> ()
-      pushInput (x:xs) chan = do
-        next <- lift $ new
-        lift $ P.put chan $ Cons x next
-        pushInput xs next
-      pushInput [] chan = do
-        lift $ P.put chan Null
-      pullOutput :: Stream a -> [a] -> [a]
-      pullOutput chan result = do
-        i <- lift $ P.get chan
-        case i of
-          Null -> do
-            stateUpdate -- ???
-            result
-          Cons e es -> pullOutput es $ result ++ [e]
 
-smap' :: StateT s Par b -> [a] -> s -> [b]
-smap' f x gs = runPar $ runStateT $ f x gs
-
-newtype OhuaM s a = OhuaM (Par (Stream a ,s -> Par s, s))
+newtype OhuaM s a = OhuaM { runOhua :: s -> (Par (Stream a  -- output stream
+                                                 , s -> Par s -- final state update
+                                                 , s -- the global state
+                                    ))
+                                  }
 
 instance Monad (OhuaM s) where
+  return :: a -> OhuaM s a
+  return v = OhuaM comp
+      where
+        comp gs = do
+          (output,done) <- sequence [new,new]
+          P.put output $ Cons v done
+          P.put done Null
+          return
+            ( output
+            , id -- there is nothing to be updated
+            , gs -- the initial state
+            )
 
+  -- NOTE this version of bind does not unwrap the value from the first
+  --      computation to pass it to the next one. that's because the
+  --      implementation relies on channels.
+  --      that is the reason why smap does not have type:
+  --      smap :: (a -> OhuaM s b) -> [a] -> OhuaM s [b]
   (>>=) :: OhuaM s a -> (a -> OhuaM s b) -> OhuaM s b
-  OhuaM comp0 >>= f = OhuaM $ do
-    (input, update, gs) <- comp0
-    output <- new
-    updatedState <- spawn $ dff input output f gs
-    return
-      ( output
-      , \s -> do
-          us <- update s
-          s' <- P.get updatedState
-          return $ merge s' us
-      , gs
-      )
+  OhuaM comp0 >>= f = OhuaM comp
+      where
+        comp gs = do
+          let (input, update, _) = runOhua comp0 gs
+          output <- new
+          updatedState <- lift $ spawn $ dff input output f gs
+          return
+            ( output
+            , \s -> do
+                us <- update s
+                s' <- P.get updatedState
+                return $ merge s' us
+            , gs -- still the initial state
+            )
 
-liftWithIndex :: Int -> (a -> State s b) -> a -> OhuaM [s] b
+runOhuaM :: OhuaM s a -> s -> (a,s)
+runOhuaM comp state =
+  let (output,updates,gs) = runPar $ comp s
+  let results = runPar $ collect output
+  let finalState = runPar updates
+  (results, finalState)
 
+smap :: (a -> OhuaM s b) -> OhuaM s [a] -> OhuaM s [b]
+smap f xs = undefined
 
-s1 = liftWithIndex 5 $ \ x -> ....
+-- liftWithIndex :: Int -> (a -> State s b) -> a -> OhuaM [s] b
+--
+-- s1 = liftWithIndex 5 $ \ x -> ....
 
 -- OhuaM ..
 -- do
 --   r0 <- a x
 --   r1 <- b x
 --   r2 <- c x
+--   xs <- d r2
+--   <- smap c xs
 --
---   <- smap
+--   where c x = do
+--                r01 <- e x
+--                r02 <- f r01
+--                return r02
 --
 -- runOhua m s
