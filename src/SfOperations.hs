@@ -177,6 +177,17 @@ instance Monad (OhuaM s) where
   OhuaM comp0 >>= f = OhuaM comp
       where
         comp gs = do
+          -- FIXME this is really not correct! we need to extract *the value* here
+          -- otherwise the composition does not work properly!
+          -- to fix this we need to implement the recursion over the output channel
+          -- of the first computation here. it needs to retrieve the value and give
+          -- that value down to the second computation. then the second computation
+          -- needs to handle the value properly. that is, it needs to be a function
+          -- that can take such a value and then stream it into the computation f.
+          -- how do we create a computation with type a -> OhuaM s a? => with the liftWithIndex function!
+          -- where do we fire off the computation f? => taking the value from comp0, we actually can get
+          -- a computation of type OhuaM s b. this thing, we can fire off, but we would actually do that
+          -- over and over again!
           let (input, update, _) = runOhua comp0 gs
           output <- new
           updatedState <- lift $ spawn $ dff input output f gs
@@ -196,7 +207,9 @@ runOhuaM comp state =
   let finalState = runPar updates
   (results, finalState)
 
-smap :: (a -> OhuaM s b) -> OhuaM s [a] -> OhuaM s [b]
+-- consider smap a normal stateful function! internally, it needs to run its
+-- computation again in OhuaM
+smap :: (a -> OhuaM s b) -> [a] -> OhuaM s [b]
 smap f xs = undefined
 
 -- liftWithIndex :: Int -> (a -> State s b) -> a -> OhuaM [s] b

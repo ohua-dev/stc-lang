@@ -60,26 +60,89 @@ oput newState = OhuaM comp where
     P.put ivar ()
     return (ivar,newState)
 
-liftWithIndex :: Int -> (a -> State s b) -> a -> OhuaM [s] b
-sf i f d = do
-  gs <- oget
-  let (x,y:ys) = splitAt i gs
-  let (d', y') = runState (f d) y
-  oput $ x ++ y' : ys
+newtype LocalStateBox s = LocalStateBox (IVar (Bool, IVar s))
+
+initLocalState :: s -> Par LocalStateBox s
+initLocalState state = do
+  (outer,inner) <- sequence [new,new]
+  P.put outer (False, inner)
+  return LocalStateBox outer
+
+updateState :: LocalStateBox s -> s -> Par ()
+touchState outer newState = do
+  (_,inner) <- P.get outer -- never has to wait
+  P.put inner newState
+
+getState :: LocalStateBox s -> Par s
+touchState outer = do
+  (_,inner) <- P.get outer -- never has to wait
+  val <- P.get inner -- will wait for the value
+  return val
+
+touchState :: LocalStateBox s -> Par ()
+touchState outer = do
+  (touched,inner) <- P.get outer -- never has to wait
+  case touched of -- TODO this might just be an assertion
+    True -> do P.put outer (True,inner)
+    False -> _ -- no multiple writes allowed
+  return ()
+
+wasStateTouched :: LocalStateBox s -> Par Bool
+wasStateTouched outer = do
+  (touched,_) <- P.get outer -- never has to wait
+  return touched
+
+liftWithIndex :: Int -> (a -> State s b) -> a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b
+liftWithIndex i f d = do
+  -- we define the proper order on the private state right here!
+  (gsIn,gsOut) <- oget
+  let (_,ithIn:_) = splitAt i gsIn
+  let (_,ithOut:_) = splitAt ith gsOut
+  localState <- getState ithIn -- this synchronizes access to the local state
+  touchState ithOut -- indentify the state used
+  let (d', localState') = runState (f d) localState
+  updateState ithOut' localState' -- this releases "the lock" on the local state
   return d'
 
--- runOhuaM :: OhuaM s a -> s -> (a,s)
--- runOhuaM comp state =
---   let (output,updates,gs) = runPar $ comp s
---   let results = runPar $ collect output
---   let finalState = runPar updates
---   (results, finalState)
+runOhuaM :: OhuaM ([LocalStateBox s],[LocalStateBox s]) a -> [s] -> (a,[s])
+runOhuaM comp state = runPar $ do
+  inState <- mapM initLocalState state
+  outState <- mapM initLocalState state
+  let (result, _) = comp (inState,outState)
+  finalState <- mapM getState outState
+  return result
 
--- is this still just mapM? -> no because the key is to proceed to the next item
--- before a result was returned. this must be a recursive function that allows
--- for that. (sounds like map!)
-smap :: (a -> OhuaM s b) -> [a] -> OhuaM s [b]
-smap f xs = undefined
+-- this spawns the computations for the elements but integrates the
+-- state dependencies!
+smap :: (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) -> [a] -> OhuaM ([LocalStateBox s],[LocalStateBox s]) [b]
+smap f xs = do
+  (gsIn,gsOut) <- oget -- get me the initial state
+  (result,gsOut') <- smap' f xs gsIn
+
+  -- merge: find the local states touched by the computation f in newGsState and
+  --        move them over to gsOut
+  oput $ merge gsOut gsOut'
+
+  return result
+  where
+    smap' :: (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) -> [a] -> [LocalStateBox s] -> OhuaM ([LocalStateBox s],[LocalStateBox s]) [b]
+    smap' f (x:xs) prevState = do
+      outS <- mapM createLocalState prevState -- create the new output state
+      return [f x (prevState,outS)] ++ $ smap' f xs outS
+    smap' f [] prevState = do
+      -- this is the final state. report it back to the smap function.
+      (gsIn, _) <- oget
+      oput (gsIn, prewState)
+      return []
+    merge :: [LocalStateBox s] -> [LocalStateBox s] -> Par [LocalStateBox s]
+    merge initialOut computedOut = mapM swapUsed $ zip initialOut computedOut
+      where
+        swapUsed :: LocalStateBox s -> LocalStateBox s -> Par LocalStateBox s
+        swapUsed i c = do
+          used <- wasStateTouched c
+          case used of
+            True -> return c
+            False -> return i
 
 -- envisioned API:
 --
