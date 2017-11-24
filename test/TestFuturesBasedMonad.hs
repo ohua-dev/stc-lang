@@ -22,18 +22,37 @@ bar x = do
   return $ x*3
 
 -- simpleAlgo :: Int -> OhuaM ([LocalStateBox Int], [LocalStateBox Int]) Int
-simpleAlgo v = do
+simpleComposition v = do
   c <- return v
   r0 <- liftWithIndex 0 foo c
   r1 <- liftWithIndex 1 bar r0
   return r1
 
-simpleTest :: Assertion
-simpleTest = do
+simpleSMap v = smap simpleComposition v
+
+returnTest :: Assertion
+returnTest = do
+  let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
+  assertEqual "result was wrong." (10::Int) result
+  assertEqual "state was wrong." ([]::[Int]) state
+
+bindTest :: Assertion
+bindTest = do
+  let (result,state) = runOhuaM (simpleComposition 10) [0,0]
+  assertEqual "result was wrong." 36 result
+  assertEqual "state was wrong." [2,3] state
+
+pipeSMapTest :: Assertion
+pipeSMapTest = do
   print "Starting test case"
-  print $ runOhuaM (simpleAlgo 10) [0,0]
+  let (result,state) = runOhuaM (simpleSMap [10,10]) [0,0]
+  assertEqual "result was wrong." [36,36] result
+  assertEqual "state was wrong." [4,6] state
+
 
 main :: IO ()
 main = defaultMainWithOpts
-       [testCase "simple" simpleTest]
+       [testCase "checking monadic return" returnTest
+       ,testCase "checking monadic bind" bindTest
+       ,testCase "checking simple pipe smap" pipeSMapTest]
        mempty
