@@ -15,8 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Statefulness, Sfc, SfOperations
-  -- Statefulness -> did not manage to integrate this properly into build process
+  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad 
   build-depends:       base >= 4.7 && < 5,
                        mtl >= 2.2.1,
                        monad-par >= 0.3.4,
