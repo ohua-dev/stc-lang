@@ -140,11 +140,6 @@ smap algo xs = do
           smap' f (y:ys) prevState touched = do
             outS <- forM prevState $ \_ -> liftPar new -- create the new output state
             liftPar $ updateTouched prevState outS touched
-            -- _ <- forM (Set.toAscList touched) $ \i -> liftPar $ do
-            --                                     let computedLocalState = prevState !! i
-            --                                     let emptyLocalState = outS !! i
-            --                                     v <- P.get computedLocalState
-            --                                     P.put emptyLocalState v
             let result = spawn $ runOhua (f y) $ GlobalState prevState outS Set.empty
             rest <- smap' f ys outS touched
             return $ [result] ++ rest
@@ -152,12 +147,6 @@ smap algo xs = do
           merge :: (NFData s) => [IVar s] -> [IVar s] -> Set Int -> Par [IVar s]
           merge initialOut computedOut touchedSMap = do
             updateTouched computedOut initialOut touchedSMap
-            -- _ <- forM (Set.toAscList touchedSMap) $ \i -> do
-            --                           let computed = computedOut !! i
-            --                           let emptyLocalState = initialOut !! i
-            --                           result <- P.get computed -- is already available!
-            --                           P.put emptyLocalState result
-            --                           return ()
             return initialOut
           updateTouched :: (NFData s) => [IVar s] -> [IVar s] -> Set Int -> Par ()
           updateTouched from to touched = do
