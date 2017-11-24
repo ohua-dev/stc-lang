@@ -1,7 +1,7 @@
--- {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 --- this implementation does not rely on channels. it builds on futures!
 
@@ -11,6 +11,7 @@ import Control.Monad
 import Control.Monad.State as S
 import Control.Monad.Par as P
 import Control.DeepSeq
+import GHC.Generics (Generic)
 
 type SF s a = a -> State [s] a
 
@@ -19,8 +20,9 @@ newtype OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
                                     ))
                                   }
 
-newtype LocalStateBox s = LocalStateBox (IVar (Bool, IVar s))
+newtype LocalStateBox s = LocalStateBox (IVar (Bool, IVar s)) deriving (Generic)
 
+instance NFData a => NFData (LocalStateBox a)
 --
 -- shortcoming: this monad implementation is strict because bind requests the
 --              actual value. consider the following situation:
@@ -134,34 +136,36 @@ runOhuaM comp state = runPar $ do
 
 -- this spawns the computations for the elements but integrates the
 -- state dependencies!
-smap :: (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) -> [a] -> OhuaM ([LocalStateBox s],[LocalStateBox s]) [b]
+smap :: (NFData b, NFData s) => (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) -> [a] -> OhuaM ([LocalStateBox s],[LocalStateBox s]) [b]
 smap f xs = do
       (gsIn,gsOut) <- oget -- get me the initial state
-      result <- smap' f xs gsIn
-      (_,gsOut') <- oget -- get me the computed state
+      futures <- smap' f xs gsIn
+      results <- forM futures $ \fut -> liftPar $ do -- collect the results
+                                                    res <- fut
+                                                    r <- P.get res
+                                                    return r
+      let result = map fst results
+      let (_,gsOut') = (last . map snd) results
       -- merge: find the local states touched by the computation f in newGsState and
       --        move them over to gsOut
       gsOut'' <- liftPar $ merge gsOut gsOut'
       oput (gsIn,gsOut'')
-
       return result
         where
-          smap' :: (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) -> [a] -> [LocalStateBox s] -> OhuaM ([LocalStateBox s],[LocalStateBox s]) [b]
+          smap' :: (NFData b, NFData s) =>
+                              (a -> OhuaM ([LocalStateBox s],[LocalStateBox s]) b) ->
+                              [a] ->
+                              [LocalStateBox s] ->
+                              OhuaM ([LocalStateBox s],[LocalStateBox s])
+                                    [Par (IVar (b, ([LocalStateBox s], [LocalStateBox s])))]
           smap' f (x:xs) prevState = do
             outS <- forM prevState (\s -> liftPar $ do  -- create the new output state
                                                     state <- getState s
-                                                    initLocalState state) 
-            -- FIXME this needs to run in parallel and therefore needs to be spawned!
-            oput (prevState, outS) -- FIXME not sure whether this will work because all recursive calls will set this state.
-            result <- f x
+                                                    initLocalState state)
+            let result = spawn $ runOhua (f x) (prevState, outS)
             rest <- smap' f xs outS
             return $ [result] ++ rest
-            -- return $ [f x (prevState,outS)] ++ smap' f xs outS
-          smap' f [] prevState = do
-            -- this is the final state. report it back to the smap function.
-            (gsIn, _) <- oget
-            oput (gsIn, prevState)
-            return []
+          smap' f [] prevState = return []
           merge :: [LocalStateBox s] -> [LocalStateBox s] -> Par [LocalStateBox s]
           merge initialOut computedOut = mapM swapUsed $ zip initialOut computedOut
             where
