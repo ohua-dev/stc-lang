@@ -30,6 +30,7 @@ simpleAlgo v = do
 
 simpleTest :: Assertion
 simpleTest = do
+  print "Starting test case"
   print $ runOhuaM (simpleAlgo 10) [0,0]
 
 main :: IO ()
