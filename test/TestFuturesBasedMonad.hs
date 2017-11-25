@@ -30,6 +30,23 @@ simpleComposition v = do
 
 simpleSMap v = smap simpleComposition v
 
+smapWithContext v = do
+  c <- return v
+  r0 <- liftWithIndex 2 foo c
+  r1 <- liftWithIndex 3 bar r0
+  r2 <- smap simpleComposition [r0,r1]
+  return r2
+
+smapResultUsed v = do
+  c <- return v
+  r0 <- liftWithIndex 2 foo c
+  r1 <- liftWithIndex 3 bar r0
+  r2 <- smap simpleComposition [r0,r1]
+  r3 <- liftWithIndex 4 foo $ r2 !! 0
+  r4 <- liftWithIndex 5 bar $ r2 !! 1
+  return (r3,r4)
+
+
 returnTest :: Assertion
 returnTest = do
   let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
@@ -44,15 +61,28 @@ bindTest = do
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
-  print "Starting test case"
   let (result,state) = runOhuaM (simpleSMap [10,10]) [0,0]
   assertEqual "result was wrong." [36,36] result
   assertEqual "state was wrong." [4,6] state
+
+smapContextTest :: Assertion
+smapContextTest = do
+  let (result,state) = runOhuaM (smapWithContext 10) [0,0,0,0]
+  assertEqual "result was wrong." [42,114] result
+  assertEqual "state was wrong." [4,6,2,3] state
+
+smapResultUsedTest :: Assertion
+smapResultUsedTest = do
+  let (result,state) = runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
+  assertEqual "result was wrong." (44,342) result
+  assertEqual "state was wrong." [4,6,2,3,2,3] state
 
 
 main :: IO ()
 main = defaultMainWithOpts
        [testCase "checking monadic return" returnTest
        ,testCase "checking monadic bind" bindTest
-       ,testCase "checking simple pipe smap" pipeSMapTest]
+       ,testCase "checking simple pipe smap" pipeSMapTest
+       ,testCase "checking smap with context" smapContextTest
+       ,testCase "checking smap result used" smapResultUsedTest]
        mempty
