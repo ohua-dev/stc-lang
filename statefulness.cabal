@@ -15,19 +15,23 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad
+  -- exposed-modules:     FuturesBasedMonad
+  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, Scheduler, SchedulerInternal
   build-depends:       base >= 4.7 && < 5,
                        mtl >= 2.2.1,
                        monad-par >= 0.3.4,
                        deepseq,
-                       containers
+                       containers,
+                       parallel,
+                       abstract-par
   default-language:    Haskell2010
   include-dirs:        cbits
   includes:            cbits/my_state.h
   install-includes:    cbits/my_state.h
   c-sources:           cbits/test.c
   extra-lib-dirs:      /Users/sertel/sandbox/statefulness/cbits
-  ghc-options:         -auto-all -Wall -O2 -fPIC -ddump-to-file -ddump-prep -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
+  -- ghc-options:         -auto-all -Wall -O2 -fPIC -ddump-to-file -ddump-simpl -dverbose-core2core -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
+  ghc-options:         -auto-all -Wall -fPIC -fno-cse -ddump-to-file -ddump-simpl -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   default-extensions:  ForeignFunctionInterface
   cc-options:          -fPIC
   build-tools:        hsc2hs
@@ -45,14 +49,16 @@ executable statefulness-exe
 test-suite statefulness-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
-  main-is:             TestFuturesBasedMonad.hs
+  -- main-is:             CorrectnessFuturesBasedMonad.hs
+  main-is:             ParallelismFuturesBasedMonad.hs
   build-depends:       base
                      , statefulness
                      , mtl
                      , test-framework
                      , test-framework-hunit
                      , HUnit
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+                     , parallel
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-ds -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   default-language:    Haskell2010
 
 source-repository head
