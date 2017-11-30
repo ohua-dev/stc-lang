@@ -89,11 +89,7 @@ instance NFData s => Monad (OhuaM s) where
           -- there is no need to spawn here!
           -- pipeline parallelism is solely created by smap.
           -- task-level parallelism is solely created by <*>
-          -- (result0, gs') <- oPrint "running one computation" `pseq` runOhua f gs
           (result0, gs') <- runOhua f gs
-          -- traceM $ "running next computation"
-          -- let gs1 = ohuaPrint gs' $ "running next computation"
-          -- (result1, gs'') <- oPrint "running next computation" `pseq` runOhua (g result0) gs'
           (result1, gs'') <- runOhua (g result0) gs'
           return (result1, gs'')
 
@@ -142,10 +138,7 @@ liftWithIndex name i f ident d = do
   return $! oPrint $ "lock acquired! -> " ++ name ++ " -> " ++ show ident
   (d', localState') <- return $ runSF (f d) localState
   c <- return $ oPrint $ "done with computation -> " ++ name ++ " -> " ++ show ident
-  -- (d'',ls') <- (oPrint $ "done with computation -> " ++ name ++ " -> " ++ show d) `pseq` return (d',localState')
   y <- liftPar $ release ithOut localState' touchedState gsIn gsOut ident name
-  -- x <- y `pseq` (return d')
-  -- let x' = ohuaPrint x $ "after -> " ++ name ++ " -> " ++ show d
   (oPrint $ "after -> " ++ name ++ " -> " ++ show ident) `pseq` oput $ (GlobalState gsIn gsOut) $ Set.insert i touchedState
   return d'
 
@@ -216,9 +209,8 @@ smap algo xs = do
                               Par [IVar (b, (GlobalState s))]
           smap' f (y:ys) (ident:idents) prevState touched = do
             outS <- forM prevState $ \_ -> new -- create the new output state
-            -- liftPar $ updateTouched prevState outS touched
             result <- spawn $ runOhua (f ident y) $ GlobalState prevState outS Set.empty
-            traceM $ "spawned smap computation: " ++ show ident
+            -- traceM $ "spawned smap computation: " ++ show ident
             rest <- smap' f ys idents outS touched
             return $ [result] ++ rest
           smap' _ [] _ _ _ = return []
