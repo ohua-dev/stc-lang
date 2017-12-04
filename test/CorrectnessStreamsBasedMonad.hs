@@ -79,8 +79,8 @@ bindTest = do
 
 main :: IO ()
 main = defaultMainWithOpts
-       [testCase "checking monadic return" returnTest
-       ,testCase "checking monadic bind" bindTest
+       [ testCase "checking monadic return" returnTest
+       , testCase "checking monadic bind" bindTest
        -- ,testCase "checking simple pipe smap" pipeSMapTest
        -- ,testCase "checking smap with context" smapContextTest
        -- ,testCase "checking smap result used" smapResultUsedTest

@@ -26,7 +26,7 @@ type SFM s b = State s b
 
 type SF s a b = a -> SFM s b
 
-newtype OhuaM s a = OhuaM { runOhua :: s -> Par (DFResult a -- the result queue
+newtype OhuaM s a = OhuaM { runOhua :: s -> Par ( DFResult a -- the result queue
                                                 , [StateResult s] -- the global state
                                                 )
                           }
@@ -41,7 +41,7 @@ type Stream a = IVar (IList a)
 instance NFData a => NFData (IList a)
 
 data DFResult a = DFStream (Stream a) | Singleton a deriving (Generic)
-data StateResult s = Async (IVar s) | Sync s deriving (Generic)
+data StateResult s = Async (IVar s) | Sync s | Redundant s deriving (Generic)
 
 -- emptyStream :: Par (Stream a)
 -- emptyStream = new
@@ -110,7 +110,7 @@ instance NFData s => Monad (OhuaM s) where
  return v = OhuaM comp
      where
        comp :: s -> Par (DFResult a,[StateResult s])
-       comp gs = return (Singleton v,[Sync gs])
+       comp gs = return (Singleton v,[Redundant gs])
 
  (>>=) :: forall a b.OhuaM s a -> (a -> OhuaM s b) -> OhuaM s b
  f >>= g = OhuaM comp
@@ -118,6 +118,7 @@ instance NFData s => Monad (OhuaM s) where
       comp :: s -> Par (DFResult b,[StateResult s]) -- this is always [IVar (s, Int)]
       comp gs = do
        (outF,stateF) <- runOhua f gs
+       traceM $ "stateF: " ++ (show (length stateF))
        -- we always have to get the first item the normal way
        case outF of
          (DFStream stream) -> do -- here, we expect more to arrive. let's check ...
@@ -126,13 +127,17 @@ instance NFData s => Monad (OhuaM s) where
               -- FIXME I'm not sure this case can ever happen. verify!
              (Last x) -> do -- nothing to be spawned! just run once and forward
                (outG,stateG) <- runOhua (g x) gs
-               return (outG,stateF ++ stateG)
+               traceM $ "here " ++ (show (length stateG))
+               return (outG,filterRedundantState $ stateF ++ stateG)
              (Cons x xs) -> do -- we found a stream, so spawn!
                (outG,stateG) <- execG x xs gs
-               return (outG,stateF ++ [stateG])
+               traceM $ "there "
+               return (outG,filterRedundantState $ stateF ++ [stateG])
          (Singleton x) -> do -- nothing to be spawned! just run once and forward
+           traceM $ "here!!! before: " ++ (show (length stateF))
            (outG,stateG) <- runOhua (g x) gs
-           return (outG,stateF ++ stateG)
+           traceM $ "stateG: " ++ (show (length stateG))
+           return (outG,filterRedundantState $ stateF ++ stateG)
       execG :: a -> Stream a -> s -> Par (DFResult b,StateResult s)
       execG x xs gs = do
         ((Singleton r),_) <- runOhua (g x) gs
@@ -156,12 +161,20 @@ instance NFData s => Monad (OhuaM s) where
             r `pseq` P.put_ gOutG $ Last r
             -- P.put gOutG $ Last x' <<- not working because it needs the NFData restriction on an output type ("b")!
             return gs'
+      -- we filter here in order keep the list of updates minimal. the other way
+      -- would be to return an empty state in 'return' and 'oget'. 
+      filterRedundantState :: [StateResult s] -> [StateResult s]
+      filterRedundantState = filter (\s -> case s of
+                                    Redundant _ -> False
+                                    _otherwise -> True)
 
-oget :: OhuaM s s
+
+oget :: Show s => OhuaM s s
 oget = OhuaM comp where
-  comp :: s -> Par (DFResult s,[StateResult s])
+  comp :: Show s => s -> Par (DFResult s,[StateResult s])
   comp gs = do
-    return (Singleton gs,[Sync gs])
+    traceM $ "oget" ++ show gs
+    return (Singleton gs,[Redundant gs])
 
 oput :: Show s => s -> OhuaM s ()
 oput newState = OhuaM comp where
@@ -170,22 +183,24 @@ oput newState = OhuaM comp where
     return (Singleton (),[Sync newState])
   -- comp _ = return (Singleton (),[Sync (newState,-1)])
 
-liftPar :: forall a s.Par a -> OhuaM (GlobalState s) a
-liftPar p = OhuaM comp
-  where
-    comp :: GlobalState s -> Par (DFResult a, [StateResult (GlobalState s)])
-    comp gs = do
-      result <- p
-      return (Singleton result,[Sync gs])
+-- liftPar :: forall a s.Par a -> OhuaM (GlobalState s) a
+-- liftPar p = OhuaM comp
+--   where
+--     comp :: GlobalState s -> Par (DFResult a, [StateResult (GlobalState s)])
+--     comp gs = do
+--       result <- p
+--       return (Singleton result,[Sync gs])
 
-liftWithIndex :: forall s a b.(NFData s, Show a, Show s) => String -> Int -> SF s a b -> Int -> a -> OhuaM (GlobalState s) b
+liftWithIndex :: forall s a b.(NFData s, Show a, Show s, Show b) => String -> Int -> SF s a b -> Int -> a -> OhuaM (GlobalState s) b
 liftWithIndex name fnIdx sf ident input = do
 -- liftWithIndex :: (NFData s, Show a, NFData b) => String -> Int -> SF s a b -> a -> OhuaM (GlobalState s) b
 -- liftWithIndex name fnIdx sf input = do
+  traceM $ "running: " ++ show name ++ " data: " ++ show input ++ " ident: " ++ show ident
   (GlobalState (gs,_)) <- oget
   let (before,ls:after) = splitAt fnIdx gs
   (result,ls') <- return $ runState (sf input) ls
   oput $ GlobalState (before ++ [ls'] ++ after,fnIdx)
+  traceM $ "running: " ++ show name ++ " data: " ++ show input ++ " ident: " ++ show ident ++ " DONE:" ++ show result
   return result
 
 runOhuaM :: (NFData a, NFData s, Show s) => OhuaM (GlobalState s) a -> [s] -> (a,[s])
@@ -197,6 +212,7 @@ runOhuaM comp initialState = runPar $ do
   localStates <- forM states $ \s -> case s of
                                         Sync resultState -> return resultState
                                         Async resultState -> P.get resultState
+                                        Redundant resultState -> return resultState
   traceM $ show localStates
   finalState <- ((foldM f []) . (sortBy (compare `on` (\(GlobalState gs) -> snd gs)))) localStates
   return (result, finalState)
