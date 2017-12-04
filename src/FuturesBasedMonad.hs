@@ -10,11 +10,12 @@ module FuturesBasedMonad where
 
 import Control.Monad
 import Control.Monad.State as S
--- import Control.Monad.Par as P
-
-import Scheduler as P
-import Control.DeepSeq
-
+import Control.Monad.Par as P
+--
+-- for debugging only:
+-- import Scheduler as P
+-- import Control.DeepSeq
+--
 import GHC.Generics (Generic)
 import Debug.Trace
 import System.IO.Unsafe
