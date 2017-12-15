@@ -7,7 +7,7 @@ import Test.Framework.Providers.HUnit
 import Control.Monad
 -- import Utils
 
-import StreamsBasedMonad
+import StreamsBasedMonad2
 
 foo :: Int -> State Int Int
 foo x = do
@@ -21,10 +21,10 @@ bar x = do
   put $ s+3
   return $ x*3
 
-simpleComposition v = do
+simpleComposition ident v = do
   c <- return v
-  r0 <- liftWithIndex "foo" 0 foo 0 c
-  r1 <- liftWithIndex "bar" 1 bar 0 r0
+  r0 <- liftWithIndex "foo" 0 foo ident c
+  r1 <- liftWithIndex "bar" 1 bar ident r0
   return r1
 
 -- simpleSMap v = smap simpleComposition v
@@ -49,12 +49,13 @@ simpleComposition v = do
 returnTest :: Assertion
 returnTest = do
   let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
+  -- let (result,state) = runOhuaM (liftValue (10::Int)) ([]::[Int])
   assertEqual "result was wrong." (10::Int) result
   assertEqual "state was wrong." ([]::[Int]) state
 
 bindTest :: Assertion
 bindTest = do
-  let (result,state) = runOhuaM (simpleComposition 10) [0,0]
+  let (result,state) = runOhuaM (simpleComposition 333 10) [0,0]
   assertEqual "result was wrong." 36 result
   assertEqual "state was wrong." [2,3] state
 
@@ -63,7 +64,7 @@ bindTest = do
 --   let (result,state) = runOhuaM (simpleSMap [10,10]) [0,0]
 --   assertEqual "result was wrong." [36,36] result
 --   assertEqual "state was wrong." [4,6] state
---
+
 -- smapContextTest :: Assertion
 -- smapContextTest = do
 --   let (result,state) = runOhuaM (smapWithContext 10) [0,0,0,0]
@@ -79,10 +80,11 @@ bindTest = do
 
 main :: IO ()
 main = defaultMainWithOpts
-       [ testCase "checking monadic return" returnTest
+       [
+         testCase "checking monadic return" returnTest
        , testCase "checking monadic bind" bindTest
-       -- ,testCase "checking simple pipe smap" pipeSMapTest
-       -- ,testCase "checking smap with context" smapContextTest
-       -- ,testCase "checking smap result used" smapResultUsedTest
+       -- , testCase "checking simple pipe smap" pipeSMapTest
+       -- , testCase "checking smap with context" smapContextTest
+       -- , testCase "checking smap result used" smapResultUsedTest
        ]
        mempty
