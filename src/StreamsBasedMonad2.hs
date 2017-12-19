@@ -2,6 +2,7 @@
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE BangPatterns #-}
 
 --- this implementation relies on channels. it more closely mimics a static dataflow graph.
@@ -25,42 +26,69 @@ import Data.Function
 type SFM s b = State s b
 type SF s a b = a -> SFM s b
 
-newtype OhuaM s a = OhuaM { runOhua :: s -> Par ( Stream a -- the result queue
-                                                , [IVar s] -- the global state
-                                                )
-                          }
-
-newtype GlobalState s = GlobalState ([s] -- the global state array
-                                    ,Int) -- the index of the entry that was changed
-                                    deriving (Generic,Show)
-instance NFData s => NFData (GlobalState s)
-
-data IList a = Cons a (IVar (IList a)) | Last a deriving (Generic)
-type Stream a = IVar (IList a)
+data IList a = Cons a (IVar (IList a)) | Last a | End deriving (Generic)
+newtype SList a = SList (IVar (IList a))
 instance NFData a => NFData (IList a)
 
-stream:: NFData a => [a] -> OhuaM s a
-stream xs = OhuaM comp
+class Stream m where
+  pull :: m a -> Par (a,m a)
+  push :: m a -> a -> Par (m a)
+
+instance Stream [] where
+  pull :: [a] -> Par (a,[a])
+  pull [] = return (undefined,[])
+  pull (x:xs) = return (x,xs)
+
+  push :: [a] -> a -> Par [a]
+  push xs x = return $ xs ++ [x]
+
+instance Stream SList where
+  pull :: SList a -> Par (a, SList a)
+  pull (SList inS) = do
+    v <- P.get inS
+    case v of
+      Cons x xs -> return (x, SList xs)
+      Last x -> return (x, SList End)
+
+  push :: SList a -> a -> Par (SList a)
+  push outS x = do
+    nextPtr <- new
+    P.put outS $ Cons x nextPtr
+    return nextPtr
+
+
+stream :: (NFData a) => [a] -> Par (SList a)
+stream xs = do
+  hd <- new
+  tl <- foldM convert hd $ init xs
+  P.put tl $ Last $ last xs
+  return hd
   where
-    comp gs = do
-      hd <- new
-      tl <- foldM convert hd $ init xs
-      P.put tl $ Last $ last xs
-      return (hd,[gs])
     convert nextPtr x = do
       nextPtr' <- new
       P.put nextPtr $ Cons x nextPtr'
       return nextPtr'
 
-collect :: Stream a -> Par [a]
+collect :: SList a -> Par [a]
 collect chan = collect' chan []
   where
-    collect' :: Stream a -> [a] -> Par [a]
+    collect' :: IVar (IList a) -> [a] -> Par [a]
     collect' c r = do
       i <- P.get c
       case i of
         Last x -> return $ r ++ [x]
         Cons x xs -> collect' xs $ r ++ [x]
+
+
+newtype OhuaM s a = OhuaM { runOhua :: forall m.(Stream m) => s -> Par ( m a -- the result queue
+                                                , [IVar s] -- the global state
+                                                )
+                          }
+
+newtype GlobalState s = GlobalState ( [s] -- the global state array
+                                    , Int) -- the index of the entry that was changed
+                                    deriving (Generic,Show)
+instance NFData s => NFData (GlobalState s)
 
 instance (NFData s,Show s) => Functor (OhuaM s) where
  fmap = Control.Monad.liftM
@@ -70,16 +98,19 @@ instance (NFData s,Show s) => Applicative (OhuaM s) where
  (<*>) = Control.Monad.ap -- TODO implement true task-level parallelism here
 
 instance (NFData s,Show s) => Monad (OhuaM s) where
- return :: forall a.a -> OhuaM s a
+ return :: forall a m.a -> OhuaM s a
  return v = OhuaM comp
      where
-       comp :: s -> Par (Stream a,[IVar s])
-       comp gs = return (stream v,[newFull gs])
+       comp :: Stream t => s -> Par (t a,[IVar s])
+       comp gs = do
+         st <- newFull gs
+         outS <- stream [v]
+         return (outS,[st])
 
- (>>=) :: forall a b.OhuaM s a -> (a -> OhuaM s b) -> OhuaM s b
+ (>>=) :: forall a b m.Stream m => OhuaM s a -> (m a -> OhuaM s b) -> OhuaM s b
  f >>= g = OhuaM comp
      where
-      comp :: s -> Par (Stream b,[IVar s]) -- this is always [IVar (s, Int)]
+      comp ::(Stream m) => s -> Par (m b,[IVar s]) -- this is always [IVar (s, Int)]
       comp gs = do
        (outF,stateF) <- runOhua f gs
        (outG,stateG) <- runOhua (g outF) gs
@@ -87,7 +118,7 @@ instance (NFData s,Show s) => Monad (OhuaM s) where
 
 oget :: Show s => OhuaM s s
 oget = OhuaM comp where
-  comp :: Show s => s -> Par (Stream s,[IVar s])
+  comp :: (Show s) => s -> Par (IVar (IList s),[IVar s])
   comp gs = do
     traceM $ "oget" ++ show gs
     return (stream [gs],[newFull gs])
@@ -98,7 +129,7 @@ oput newState = OhuaM comp where
     traceM $ "oput" ++ show newState
     return (stream [],[newFull newState])
 
-execDFKernel :: forall a b s.Show s => (a -> OhuaM (GlobalState s) b) -> Stream a -> s -> Par (Stream b,IVar s)
+execDFKernel :: (Show s, Stream m) => (a -> OhuaM (GlobalState s) b) -> m a -> s -> Par (m b,IVar s)
 execDFKernel sf inS gs = do
   outS <- stream []
   finalState <- spawn_ $ execDFKernel' inS outS gs
@@ -128,7 +159,7 @@ execSF name fnIdx sf ident input = do
   traceM $ "running: " ++ show name ++ " data: " ++ show input ++ " ident: " ++ show ident ++ " DONE:" ++ show result
   return result
 
-liftWithIndex :: (NFData s, Show a, Show s, Show b) => String -> Int -> SF s a b -> Int -> Stream a -> OhuaM (GlobalState s) b
+liftWithIndex :: (NFData s, Show a, Show s, Show b, Stream m) => String -> Int -> SF s a b -> Int -> m a -> OhuaM (GlobalState s) b
 liftWithIndex name fnIdx sf ident input = OhuaM $ \gs -> execDFKernel (execSF name fnIdx sf ident) input gs
 
 runOhuaM :: (NFData a, NFData s, Show s) => OhuaM (GlobalState s) a -> [s] -> (a,[s])

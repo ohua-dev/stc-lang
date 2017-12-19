@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 import Control.Monad.State
 
 import Test.HUnit hiding (State)
@@ -7,7 +9,7 @@ import Test.Framework.Providers.HUnit
 import Control.Monad
 -- import Utils
 
-import StreamsBasedMonad2
+import StreamsBasedFreeMonad
 
 foo :: Int -> State Int Int
 foo x = do
@@ -25,7 +27,8 @@ simpleComposition ident v = do
   c <- return v
   r0 <- liftWithIndex "foo" 0 foo ident c
   r1 <- liftWithIndex "bar" 1 bar ident r0
-  return r1
+  r2 <- liftWithIndex "foobar" 2 bar ident r1
+  return r2
 
 -- simpleSMap v = smap simpleComposition v
 --
@@ -46,12 +49,11 @@ simpleComposition ident v = do
 --   return (r3,r4)
 
 
-returnTest :: Assertion
-returnTest = do
-  let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
-  -- let (result,state) = runOhuaM (liftValue (10::Int)) ([]::[Int])
-  assertEqual "result was wrong." (10::Int) result
-  assertEqual "state was wrong." ([]::[Int]) state
+-- returnTest :: Assertion
+-- returnTest = do
+--   let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
+--   assertEqual "result was wrong." (10::Int) result
+--   assertEqual "state was wrong." ([]::[Int]) state
 
 bindTest :: Assertion
 bindTest = do
@@ -81,8 +83,8 @@ bindTest = do
 main :: IO ()
 main = defaultMainWithOpts
        [
-         testCase "checking monadic return" returnTest
-       , testCase "checking monadic bind" bindTest
+         -- testCase "checking monadic return" returnTest
+        testCase "checking monadic bind" bindTest
        -- , testCase "checking simple pipe smap" pipeSMapTest
        -- , testCase "checking smap with context" smapContextTest
        -- , testCase "checking smap result used" smapResultUsedTest

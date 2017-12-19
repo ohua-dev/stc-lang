@@ -17,7 +17,7 @@ library
   hs-source-dirs:      src
   -- exposed-modules:     FuturesBasedMonad
   -- exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, Scheduler, SchedulerInternal
-  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedMonad2
+  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedFreeMonad
   build-depends:       base >= 4.7 && < 5,
                        mtl >= 2.2.1,
                        monad-par >= 0.3.4,
