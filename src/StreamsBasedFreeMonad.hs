@@ -68,6 +68,16 @@ instance Show (SF s a b) where
 -- essentially the rest of the whole computation. in the dataflow/streams approach
 -- we assume that we explicitly know the data dependencies! that seems to be the very
 -- reason why streams can not be expressed in terms of a monad!
+--
+-- in order to really find these direct dependencies, our API would have to somehow
+-- directly integrate the concept of variables. we would have to leave the world of
+-- "standard haskell" and would in the end start to define our very own language, e.g.,
+-- data Ohua = Var String | SFC (SF s a b) idx | Let
+-- programs would then look something like:
+-- do
+--  Let (Var "a") (sfc foo 0)
+--      (SFC bar 1 (Var a))
+-- it is basically what we already have implemented in the "real" Ohua compiler!
 
 
 -- data OhuaAST a b s next = Value a |
