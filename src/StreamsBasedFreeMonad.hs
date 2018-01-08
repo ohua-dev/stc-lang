@@ -32,6 +32,7 @@ import           Control.Monad.Writer     as W
 import           Control.Concurrent.Async
 import           Control.Concurrent.Chan
 import           Control.Concurrent.MVar
+import           Control.Exception
 import           Control.Monad.Free
 import           Control.Parallel         (pseq)
 import           Data.Dynamic
@@ -215,7 +216,7 @@ instance Enum Unique where
 data Accessor s a = Accessor { getter :: s -> a, setter :: s -> a -> s }
 
 newtype SFMonad sfState ret = SFMonad { runSFMonad :: StateT sfState IO ret }
-    deriving (Typeable, Monad, Applicative, Functor)
+    deriving (Typeable, Monad, Applicative, Functor, MonadIO)
 
 -- | This type level function collects a list of input arguments for a given function
 -- So long as the input type is a function type, aka (->) it recurses onto the rhs.
@@ -308,18 +309,18 @@ instance CollectVars (ASTM gs (Var a)) where
 
 data T = T
 data A = A
-data B = B
+data B = B deriving Show
 data C = C
 
 stag :: Accessor s ()
 stag = Accessor (const ()) const
 
 sf1 :: ASTM s (Var T)
-sf1 = call (liftSf (return T :: SFMonad () T)) stag
+sf1 = call (liftSf (liftIO (putStrLn "Executing sf1") >> pure T :: SFMonad () T)) stag
 sf2 :: Var T -> ASTM s (Var A)
-sf2 = call (liftSf (\T -> return A :: SFMonad () A)) stag
+sf2 = call (liftSf (\T -> liftIO (putStrLn "Executing sf2") >> return A :: SFMonad () A)) stag
 sf3 :: Var T -> Var A -> ASTM s (Var B)
-sf3 = call (liftSf (\T A -> return B :: SFMonad () B)) stag
+sf3 = call (liftSf (\T A -> liftIO (putStrLn "Executing sf3") >> return B :: SFMonad () B)) stag
 createAlgo :: ASTM s (Var a) -> Algorithm s a
 createAlgo (ASTM m) = Algorithm w retVar
   where
@@ -362,10 +363,15 @@ runAlgo (Algorithm nodes retVar) st = do
 
     let finalMap = Map.update (Just . (retChan:)) retVar outMap
 
-    mapM_ (link <=< async . \(SFRef sf tag, inChans, retUnique :: Unique) -> runFunc sf tag inChans (fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap) stateVar) funcs
-    Right ret <- readChan retChan
-    Left () <- readChan retChan
-    pure $ fromMaybe (error "wrong type") $ fromDynamic ret
+    bracket
+        (mapM (async . \(SFRef sf tag, inChans, retUnique :: Unique) -> runFunc sf tag inChans (fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap) stateVar) funcs)
+        (mapM_ cancel)
+        $ \threads -> do
+            mapM_ link threads
+            Right ret <- readChan retChan
+            Left () <- readChan retChan
+            mapM_ cancel threads
+            pure $ fromMaybe (error "wrong type") $ fromDynamic ret
 
 
 runFunc :: forall state inputTypes retType globalState.
@@ -376,7 +382,7 @@ runFunc :: forall state inputTypes retType globalState.
 runFunc (Sf (f :: f)) accessor inChans outChans stTrack = loop
   where
     runFuncOnce inVars = do
-        s <- readMVar stTrack
+        s <- takeMVar stTrack
         (ret, newState) <- runStateT (runSFMonad (applyVars f inVars)) (getter accessor s)
         putMVar stTrack (setter accessor s newState)
         pure ret

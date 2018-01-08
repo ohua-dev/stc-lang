@@ -65,6 +65,12 @@ test-suite statefulness-test
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-ds -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   default-language:    Haskell2010
 
+executable streams-based-monad-exe
+  hs-source-dirs: streams-based-exe
+  main-is: Main.hs
+  build-depends: base, statefulness
+  default-language: Haskell2010
+
 source-repository head
   type:     git
   location: https://bitbucket.org/nrink/statefulness
