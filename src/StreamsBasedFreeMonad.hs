@@ -95,6 +95,7 @@ data Sf fnType
     ) => Sf fnType -- reference to the actual function
 
 
+-- | A way to retrieve and update local state in a larger state structure
 type Accessor s a = Lens' s a
 
 
@@ -141,6 +142,10 @@ type family ReturnType (t :: Type) :: Type where
     ReturnType (a -> b) = ReturnType b
     ReturnType b = b
 
+
+-- | Make a stateful function from some arbitrary function of type @f@
+--
+-- @f@ is not required to have any arguments but must return in the 'SFMonad'
 liftSf ::
     ( ReturnType f ~ SFMonad state ret
     , Typeable ret
@@ -150,15 +155,20 @@ liftSf ::
 liftSf f = Sf f
 
 
+-- | Map a function type by wrapping each argument in a type with kind @* -> *@
 type family MapFnType (f :: Type -> Type) t where
   MapFnType f (a -> b) = f a -> MapFnType f b
   MapFnType _ b = b
 
+-- | Set the return type of function @f@ to @t@
 type family SetReturnType f t where
   SetReturnType f (a -> b) = a -> SetReturnType f b
   SetReturnType f _ = f
 
 
+-- | "Call" a stateful function.
+-- This takes a lifted function (see 'liftSf'), links it with an accessor for the
+-- state that this function uses and produces a function that can be used in 'ASTM'
 call :: ( newFnType ~ SetReturnType (ASTM globalState (Var ret)) (MapFnType Var f)
         , ReturnType f ~ SFMonad state ret
         , Ret newFnType ~ ret
@@ -167,17 +177,30 @@ call :: ( newFnType ~ SetReturnType (ASTM globalState (Var ret)) (MapFnType Var 
         ) => Sf f -> Accessor globalState state -> newFnType
 call sf accessor = collectVars [] $ \vars -> liftF $ InvokeSf sf accessor (reverse vars) id
 
+-- | Goodbye typesafety :(
 toVoidVar :: Var a -> Var Void
 toVoidVar (Var u) = Var u
 
-smap :: (Typeable a, Typeable b) => (Var a -> ASTM globalState (Var b)) -> Var [a] -> ASTM globalState (Var [b])
+-- | The smap primitive. Applies an ohua program to each value from a collection.
+-- The semantics guarantee that the values are processed in-order with respects to each
+-- node in the subgraph.
+smap :: (Typeable a, Typeable b)
+     => (Var a -> ASTM globalState (Var b))
+     -> Var [a]
+     -> ASTM globalState (Var [b])
 smap f lref = liftF $ Smap f lref id
 
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t where
+    -- | As this class calls itself recursively this whitnesses that
+    -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM state (Var r)@
     type Ret t
+    -- | This exists becuase we need a whitness that the @state@ type in
+    -- the ASTM continuation is the same as in the ASTM value returned by @t@ in the end.
     type GlobalState t
-    collectVars :: [Var Void] -> ([Var Void] -> ASTM (GlobalState t) (Var (Ret t))) -> t
+    collectVars :: [Var Void] -- ^ The input values
+                -> ([Var Void] -> ASTM (GlobalState t) (Var (Ret t))) -- ^ the continuation
+                -> t
 
 instance (Typeable a, CollectVars b) => CollectVars (Var a -> b) where
     type Ret (Var a -> b) = Ret b
@@ -259,28 +282,47 @@ data Packet a
     | EndOfStreamPacket
 
 
+-- | True if the packet is an 'EndOFStreamPacket'
 isEOS :: Packet a -> Bool
 isEOS EndOfStreamPacket = True
 isEOS _ = False
 
-newtype Stream a = Stream { unStream :: Chan (Packet a) }
+-- | A recieve end of a communication channel
+newtype Source a = Source { unSource :: IO (Packet a) }
 
-newtype StreamM a = StreamM { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Stream Dynamic], [Stream Dynamic]) IO) a }
+-- | A send end of a communication channel
+newtype Sink a = Sink { unSink :: Packet a -> IO () }
+
+-- | The monad that a stream processor runs in.
+-- It has access to a number of input streams to pull from
+-- and a number of output streams to send to.
+-- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
+-- which stops the processing.
+newtype StreamM a = StreamM { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Source Dynamic], [Sink Dynamic]) IO) a }
   deriving (Functor, Applicative, Monad, MonadIO)
 
-createStream :: IO (Stream a)
-createStream = Stream <$> newChan
+-- | Create a stream with a end that can only be sent to and one that can only be read from.
+createStream :: IO (Sink a, Source a)
+createStream = do
+  chan <- newChan
+  pure
+    ( Sink $ writeChan chan
+    , Source $ readChan chan
+    )
 
+-- | Send a packet to all output streams
 sendPacket :: Packet Dynamic -> StreamM ()
-sendPacket p = StreamM $ liftIO . mapM_ ((`writeChan` p) . unStream) =<< asks snd
+sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< asks snd
 
+-- | Stop processing immediately. No subsequent acrions are performed.
 abortProcessing :: StreamM a
 abortProcessing = StreamM (throwError Nothing)
 
+-- | This can be used to gracefully end processing after an 'EndOfStreamPacket' 
 endProcessing :: Int -> StreamM a
 endProcessing i = do
   numChans <- StreamM $ asks (length . fst)
-  vals <- mapM (recievePacket <=< getStream) [x | x <- [0..numChans - 1], x /= i]
+  vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], x /= i]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
   if all isEOS vals then
     abortProcessing
@@ -290,15 +332,15 @@ endProcessing i = do
 sendEOS :: StreamM ()
 sendEOS = sendPacket EndOfStreamPacket
 
-recievePacket :: Stream a -> StreamM (Packet a)
-recievePacket = StreamM . liftIO . readChan . unStream
+recievePacket :: Source a -> StreamM (Packet a)
+recievePacket = StreamM . liftIO . unSource
 
-getStream :: Int -> StreamM (Stream Dynamic)
-getStream i = StreamM $ asks $ (!! i) . fst
+getSource :: Int -> StreamM (Source Dynamic)
+getSource i = StreamM $ asks $ (!! i) . fst
 
 recieveUntyped :: Int -> StreamM Dynamic
 recieveUntyped i =
-  getStream i >>= recievePacket >>= \case
+  getSource i >>= recievePacket >>= \case
     EndOfStreamPacket -> endProcessing i
     UserPacket u      -> return u
 
@@ -369,7 +411,7 @@ runFunc (Sf (f :: f)) accessor stTrack = do
 -- Running the stream
 
 
-mountStreamProcessor :: StreamM () -> [Stream Dynamic] -> [Stream Dynamic] -> IO ()
+mountStreamProcessor :: StreamM () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
 mountStreamProcessor process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM $ forever safeProc) (inputs, outputs)
   case result of
@@ -388,33 +430,34 @@ customAsync = async
 
 runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
 runAlgo (Algorithm nodes retVar) st = do
-    stateVar <- newIORef st
-    let outputMap = Map.fromList $ zip (map outputRef nodes) (repeat []) :: Map.Map Unique [Stream Dynamic]
-        f (m, l) (Node func inputs oUnique) = do
-            inChans <- mapM (const createStream) inputs
-            let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs inChans)
-            pure (newMap, (func, inChans, oUnique):l)
-    (outMap, funcs) <- foldM f (outputMap, []) nodes
+   stateVar <- newIORef st
+   let outputMap :: Map.Map Unique [Sink Dynamic]
+       outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
+       f (m, l) (Node func inputs oUnique) = do
+         (sinks, sources) <- unzip <$> mapM (const createStream) inputs
+         let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
+         pure (newMap, (func, sources, oUnique):l)
+   (outMap, funcs) <- foldM f (outputMap, []) nodes
 
-    retStream@(Stream retChan) <- createStream
+   (retSink, Source retSource) <- createStream
 
-    let finalMap = Map.update (Just . (retStream:)) retVar outMap
+   let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
-    bracket
-        (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
-            let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
-                processor =
-                  case nt of
-                    CallSf (SFRef sf accessor) -> runFunc sf accessor stateVar
-                    StreamProcessor processor -> processor
-            in mountStreamProcessor processor inChans outChans
-            ) funcs)
-        ( mapM_ cancel )
-        $ \threads -> do
-            mapM_ link threads
-            UserPacket ret <- readChan retChan
-            EndOfStreamPacket <- readChan retChan
-            pure $ forceDynamic ret
+   bracket
+     (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
+       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
+           processor =
+             case nt of
+               CallSf (SFRef sf accessor) -> runFunc sf accessor stateVar
+               StreamProcessor processor -> processor
+       in mountStreamProcessor processor inChans outChans)
+       funcs)
+     ( mapM_ cancel )
+     $ \threads -> do
+         mapM_ link threads
+         UserPacket ret <- retSource
+         EndOfStreamPacket <- retSource
+         pure $ forceDynamic ret
 
 
 -- Inspect the graph
@@ -423,13 +466,13 @@ runAlgo (Algorithm nodes retVar) st = do
 
 printGraph :: Algorithm s r -> IO ()
 printGraph (Algorithm gr ret) = do
-    forM_ gr $ \(Node nt vars sfRet) ->
-        let ntStr = case nt of
-                        CallSf _          -> "Sf"
-                        StreamProcessor _ -> "StreamProcessor"
-        in
-        putStrLn $ ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
-    putStrLn $ "last return is " ++ show (uniqueToInt ret)
+  forM_ gr $ \(Node nt vars sfRet) ->
+    let ntStr = case nt of
+                    CallSf _          -> "Sf"
+                    StreamProcessor _ -> "StreamProcessor"
+    in
+    putStrLn $ ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
+  putStrLn $ "last return is " ++ show (uniqueToInt ret)
 
 
 -- Types for the example
