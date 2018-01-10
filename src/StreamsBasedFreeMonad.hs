@@ -10,12 +10,13 @@
 {-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs               #-}
+{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE Rank2Types                 #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
-{-# LANGUAGE LambdaCase, Rank2Types #-}
 
 
 module StreamsBasedFreeMonad where
@@ -44,7 +45,7 @@ import qualified Data.Map                 as Map
 import           Data.Maybe
 import           Data.Void
 import           Debug.Trace
-import Lens.Micro
+import           Lens.Micro
 
 
 -- Utils
@@ -67,29 +68,29 @@ data Unique = Unique { uniqueToInt :: Int } deriving (Ord, Eq)
 
 
 instance Enum Unique where
-    fromEnum = uniqueToInt
-    toEnum = Unique
+  fromEnum = uniqueToInt
+  toEnum = Unique
 
 -- | Create a new unique thing
 freshUnique :: MonadState Unique m => m Unique
 freshUnique = do
-    modify succ
-    S.get
-    
+  modify succ
+  S.get
+
 
 -- | A type tagged tracker for where data flows inside the program
 newtype Var t = Var { unwrapVar :: Unique }
 
 
 -- | The monad for the stateful function to run in
-newtype SFMonad sfState ret = SFMonad { runSFMonad :: StateT sfState IO ret }
-    deriving (Typeable, Monad, Applicative, Functor, MonadIO, MonadState sfState)
+newtype SfMonad sfState ret = SfMonad { runSfMonad :: StateT sfState IO ret }
+  deriving (Typeable, Monad, Applicative, Functor, MonadIO, MonadState sfState)
 
 
 -- | A stateful funtion nicely packaged with all its required capabilities
 data Sf fnType
     = forall state returnType .
-    ( ReturnType fnType ~ SFMonad state returnType
+    ( ReturnType fnType ~ SfMonad state returnType
     , Typeable returnType
     , ApplyVars fnType
     ) => Sf fnType -- reference to the actual function
@@ -101,31 +102,29 @@ type Accessor s a = Lens' s a
 
 -- | Things you can do in the AST Monad
 data ASTAction globalState a
-    = forall sfType returnType sfState.
-        ( ReturnType sfType ~ SFMonad sfState returnType
-        ) =>
-        InvokeSf
-          (Sf sfType)
-          (Accessor globalState sfState)
-          [Var Void] -- reference to the input vars
-          (Var returnType -> a) -- continutation
-    | forall inputType returnType .
-        (Typeable inputType, Typeable returnType)
-        =>
-        Smap
-            (Var inputType -> ASTM globalState (Var returnType))
-            (Var [inputType])
-            (Var [returnType] -> a)
+  = forall sfType returnType sfState
+    . ( ReturnType sfType ~ SfMonad sfState returnType )
+    => InvokeSf
+         (Sf sfType)
+         (Accessor globalState sfState)
+         [Var Void] -- reference to the input vars
+         (Var returnType -> a) -- continutation
+  | forall inputType returnType
+    . (Typeable inputType, Typeable returnType)
+    => Smap
+         (Var inputType -> ASTM globalState (Var returnType))
+         (Var [inputType])
+         (Var [returnType] -> a)
 
 -- | The AST Monad
 newtype ASTM globalState a = ASTM (Free (ASTAction globalState) a)
-    deriving (MonadFree (ASTAction globalState), Monad, Applicative, Functor)
+  deriving (MonadFree (ASTAction globalState), Monad, Applicative, Functor)
 
 
 instance Functor (ASTAction globalState) where
-    fmap f (InvokeSf sf tag vars ac) = InvokeSf sf tag vars (f . ac)
-    fmap f (Smap f1 v cont)          = Smap f1 v (f . cont)
-    
+  fmap f (InvokeSf sf tag vars ac) = InvokeSf sf tag vars (f . ac)
+  fmap f (Smap f1 v cont)          = Smap f1 v (f . cont)
+
 
 -- | This type level function retrieves the return type of a function with any arity.
 -- So long as the input type is a function type, aka (->) it recurses onto the rhs.
@@ -145,13 +144,11 @@ type family ReturnType (t :: Type) :: Type where
 
 -- | Make a stateful function from some arbitrary function of type @f@
 --
--- @f@ is not required to have any arguments but must return in the 'SFMonad'
-liftSf ::
-    ( ReturnType f ~ SFMonad state ret
-    , Typeable ret
-    , ApplyVars f
-    )
-    => f -> Sf f
+-- @f@ is not required to have any arguments but must return in the 'SfMonad'
+liftSf :: ( ReturnType f ~ SfMonad state ret
+          , Typeable ret
+          , ApplyVars f)
+       => f -> Sf f
 liftSf f = Sf f
 
 
@@ -170,7 +167,7 @@ type family SetReturnType f t where
 -- This takes a lifted function (see 'liftSf'), links it with an accessor for the
 -- state that this function uses and produces a function that can be used in 'ASTM'
 call :: ( newFnType ~ SetReturnType (ASTM globalState (Var ret)) (MapFnType Var f)
-        , ReturnType f ~ SFMonad state ret
+        , ReturnType f ~ SfMonad state ret
         , Ret newFnType ~ ret
         , GlobalState newFnType ~ globalState
         , CollectVars newFnType
@@ -192,25 +189,25 @@ smap f lref = liftF $ Smap f lref id
 
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t where
-    -- | As this class calls itself recursively this whitnesses that
-    -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM state (Var r)@
-    type Ret t
-    -- | This exists becuase we need a whitness that the @state@ type in
-    -- the ASTM continuation is the same as in the ASTM value returned by @t@ in the end.
-    type GlobalState t
-    collectVars :: [Var Void] -- ^ The input values
-                -> ([Var Void] -> ASTM (GlobalState t) (Var (Ret t))) -- ^ the continuation
-                -> t
+  -- | As this class calls itself recursively this whitnesses that
+  -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM state (Var r)@
+  type Ret t
+  -- | This exists becuase we need a whitness that the @state@ type in
+  -- the ASTM continuation is the same as in the ASTM value returned by @t@ in the end.
+  type GlobalState t
+  collectVars :: [Var Void] -- ^ The input values
+              -> ([Var Void] -> ASTM (GlobalState t) (Var (Ret t))) -- ^ the continuation
+              -> t
 
 instance (Typeable a, CollectVars b) => CollectVars (Var a -> b) where
-    type Ret (Var a -> b) = Ret b
-    type GlobalState (Var a -> b) = GlobalState b
-    collectVars l f v = collectVars (toVoidVar v : l) f
+  type Ret (Var a -> b) = Ret b
+  type GlobalState (Var a -> b) = GlobalState b
+  collectVars l f v = collectVars (toVoidVar v : l) f
 
 instance CollectVars (ASTM gs (Var a)) where
-    type Ret (ASTM gs (Var a)) = a
-    type GlobalState (ASTM gs (Var a)) = gs
-    collectVars l f = f l
+  type Ret (ASTM gs (Var a)) = a
+  type GlobalState (ASTM gs (Var a)) = gs
+  collectVars l f = f l
 
 
 
@@ -218,19 +215,19 @@ instance CollectVars (ASTM gs (Var a)) where
 
 
 
--- | Another way of referencing a stateful function. This one also contains an acessor for the state
-data SFRef globalState
-    = forall sfType state returnType
-    . (ReturnType sfType ~ SFMonad state returnType)
-    => SFRef (Sf sfType) (Accessor globalState state)
+-- | Another way of referencing a stateful function. This one also contains an accessor for the state
+data SfRef globalState
+  = forall sfType state returnType
+  . (ReturnType sfType ~ SfMonad state returnType)
+  => SfRef (Sf sfType) (Accessor globalState state)
 
 
 -- | This governs how a node is embedded.
 -- Either a stateful function, which gets wrapped, or a stream processor which is
 -- more powerful and does its own dataflow processing.
 data NodeType globalState
-    = CallSf (SFRef globalState)
-    | StreamProcessor (StreamM ())
+  = CallSf (SfRef globalState)
+  | StreamProcessor (StreamM ())
 
 
 data Node globalState = Node
@@ -249,29 +246,34 @@ createAlgo (ASTM m) = Algorithm w retVar
     (Var retVar, _, w) = runRWS (iterM go m) () (Unique 0)
     go :: ASTAction s (RWS () [Node s] Unique b) -> RWS () [Node s] Unique b
     go (InvokeSf sf tag vars cont) =
-        continue cont $ Node (CallSf $ SFRef sf tag) (map unwrapVar vars)
-    go (Smap (innerCont :: Var inputType -> ASTM globalState (Var returnType)) (Var inputVar) cont) = do
-        innerContVar <- freshUnique
-        sizeRet <- freshUnique
-        let iproxy = Proxy :: Proxy inputType
-        tell
-            [ Node (StreamProcessor $ smapIn iproxy) [inputVar] innerContVar
-            , Node (StreamProcessor $ sizeOp iproxy) [inputVar] sizeRet
-            ]
-        let ASTM inner = innerCont (Var innerContVar)
-        v <- iterM go inner
-        collReturn <- freshUnique
-        -- tell $ pure $ Node Collect [unwrapVar v] collReturn
-        -- cont (Var collReturn)
-        continue cont (Node (StreamProcessor (collectOp (Proxy :: Proxy returnType))) [sizeRet, unwrapVar v])
+      continue cont $ Node (CallSf $ SfRef sf tag) (map unwrapVar vars)
+    go (Smap
+         (innerCont :: Var inputType -> ASTM globalState (Var returnType))
+         (Var inputVar)
+         cont) = do
+      innerContVar <- freshUnique
+      sizeRet <- freshUnique
+      tell
+          [ Node (StreamProcessor $ smapIn iproxy) [inputVar] innerContVar
+          , Node (StreamProcessor $ sizeOp iproxy) [inputVar] sizeRet
+          ]
+      let ASTM inner = innerCont (Var innerContVar)
+      v <- iterM go inner
+      continue
+        cont
+        (Node
+          (StreamProcessor (collectOp (Proxy :: Proxy returnType)))
+            [sizeRet, unwrapVar v])
+      where
+        iproxy = Proxy :: Proxy inputType
 
     continue :: (Var t -> RWS () [Node s] Unique b)
              -> (Unique -> Node s)
              -> RWS () [Node s] Unique b
     continue cont f = do
-        u <- freshUnique
-        tell $ pure $ f u
-        cont (Var u)
+      u <- freshUnique
+      tell $ pure $ f u
+      cont (Var u)
 
 
 -- The stream backend
@@ -285,7 +287,7 @@ data Packet a
 -- | True if the packet is an 'EndOFStreamPacket'
 isEOS :: Packet a -> Bool
 isEOS EndOfStreamPacket = True
-isEOS _ = False
+isEOS _                 = False
 
 -- | A recieve end of a communication channel
 newtype Source a = Source { unSource :: IO (Packet a) }
@@ -318,7 +320,7 @@ sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< asks snd
 abortProcessing :: StreamM a
 abortProcessing = StreamM (throwError Nothing)
 
--- | This can be used to gracefully end processing after an 'EndOfStreamPacket' 
+-- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
 endProcessing :: Int -> StreamM a
 endProcessing i = do
   numChans <- StreamM $ asks (length . fst)
@@ -381,29 +383,30 @@ atomicModifyIORef'_ :: MonadIO m => IORef a -> (a -> a) -> m ()
 atomicModifyIORef'_ ref f = liftIO $ atomicModifyIORef' ref ((, ()) . f)
 
 
+-- | A class that is used to apply a function with multiple arguments to a
+-- list of arguments.
 class ApplyVars t where
-    applyVars :: t -> [Dynamic] -> ReturnType t
+  applyVars :: t -> [Dynamic] -> ReturnType t
 
 
 instance (ApplyVars b, Typeable a) => ApplyVars (a -> b) where
-    applyVars func (x:xs) = applyVars (func $ forceDynamic x) xs
-    applyVars _ []        = error "too few arguments"
+  applyVars func (x:xs) = applyVars (func $ forceDynamic x) xs
+  applyVars _ []        = error "too few arguments"
 
 
-instance ApplyVars (SFMonad state retType) where
-    applyVars res [] = res
-    applyVars _ _    = error "Too many arguments"
+instance ApplyVars (SfMonad state retType) where
+  applyVars res [] = res
+  applyVars _ _    = error "Too many arguments"
 
 
-runFunc :: (ReturnType f ~ SFMonad state r)
-        => Sf f
-        -> Accessor globalState state
+-- | Given a reference for a stateful function run it as a stream processor
+runFunc :: SfRef globalState
         -> IORef globalState
         -> StreamM ()
-runFunc (Sf (f :: f)) accessor stTrack = do
+runFunc (SfRef (Sf f) accessor) stTrack = do
   inVars <- recieveAllUntyped
   s <- liftIO $ readIORef stTrack
-  (ret, newState) <- liftIO $ runStateT (runSFMonad (applyVars f inVars)) (s ^. accessor)
+  (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
   atomicModifyIORef'_ stTrack (accessor .~ newState)
   send ret
 
@@ -423,45 +426,45 @@ mountStreamProcessor process inputs outputs = do
       | null inputs = process >> sendEOS >> abortProcessing
       | otherwise = forever process
 
-      
+
 customAsync :: IO a -> IO (Async a)
 customAsync = async
 
 
 runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
 runAlgo (Algorithm nodes retVar) st = do
-   stateVar <- newIORef st
-   let outputMap :: Map.Map Unique [Sink Dynamic]
-       outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-       f (m, l) (Node func inputs oUnique) = do
-         (sinks, sources) <- unzip <$> mapM (const createStream) inputs
-         let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
-         pure (newMap, (func, sources, oUnique):l)
-   (outMap, funcs) <- foldM f (outputMap, []) nodes
+  stateVar <- newIORef st
+  let outputMap :: Map.Map Unique [Sink Dynamic]
+      outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
+      f (m, l) (Node func inputs oUnique) = do
+        (sinks, sources) <- unzip <$> mapM (const createStream) inputs
+        let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
+        pure (newMap, (func, sources, oUnique):l)
+  (outMap, funcs) <- foldM f (outputMap, []) nodes
 
-   (retSink, Source retSource) <- createStream
+  (retSink, Source retSource) <- createStream
 
-   let finalMap = Map.update (Just . (retSink:)) retVar outMap
+  let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
-   bracket
-     (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
-       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
-           processor =
-             case nt of
-               CallSf (SFRef sf accessor) -> runFunc sf accessor stateVar
-               StreamProcessor processor -> processor
-       in mountStreamProcessor processor inChans outChans)
-       funcs)
-     ( mapM_ cancel )
-     $ \threads -> do
-         mapM_ link threads
-         UserPacket ret <- retSource
-         EndOfStreamPacket <- retSource
-         pure $ forceDynamic ret
+  bracket
+    (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
+      let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
+          processor =
+            case nt of
+              CallSf sfRef              -> runFunc sfRef stateVar
+              StreamProcessor processor -> processor
+      in mountStreamProcessor processor inChans outChans)
+      funcs)
+    ( mapM_ cancel )
+    $ \threads -> do
+        mapM_ link threads
+        UserPacket ret <- retSource
+        EndOfStreamPacket <- retSource
+        pure $ forceDynamic ret
 
 
 -- Inspect the graph
-  
+
 
 
 printGraph :: Algorithm s r -> IO ()
@@ -491,21 +494,21 @@ stag :: Accessor s ()
 stag = lens (const ()) const
 
 sf1 :: ASTM s (Var T)
-sf1 = call (liftSf (liftIO (putStrLn "Executing sf1") >> pure T :: SFMonad () T)) stag
+sf1 = call (liftSf (liftIO (putStrLn "Executing sf1") >> pure T :: SfMonad () T)) stag
 
 sf2 :: Var T -> ASTM s (Var [Int])
-sf2 = call (liftSf (\T -> liftIO (putStrLn "Executing sf2") >> return [0..20] :: SFMonad () [Int])) stag
+sf2 = call (liftSf (\T -> liftIO (putStrLn "Executing sf2") >> return [0..20] :: SfMonad () [Int])) stag
 
 sf3 :: Var T -> Var Int -> ASTM s (Var Int)
-sf3 = call (liftSf (\T i -> liftIO (putStrLn "Executing sf3") >> return (succ i) :: SFMonad () Int)) stag
+sf3 = call (liftSf (\T i -> liftIO (putStrLn "Executing sf3") >> return (succ i) :: SfMonad () Int)) stag
 
 aggregate :: Var Int -> ASTM Int (Var Int)
-aggregate = call (liftSf (\i -> S.modify (+ i) >> S.get :: SFMonad Int Int)) (lens id (const id))
+aggregate = call (liftSf (\i -> S.modify (+ i) >> S.get :: SfMonad Int Int)) (lens id (const id))
 
 
 algorithm :: Algorithm Int [Int]
 algorithm = createAlgo $ do
-    var1 <- sf1
-    var3 <- sf2 var1
-    v <- smap aggregate var3
-    pure v
+  var1 <- sf1
+  var3 <- sf2 var1
+  v <- smap aggregate var3
+  pure v
