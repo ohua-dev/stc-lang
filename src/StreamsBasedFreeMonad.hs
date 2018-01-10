@@ -280,7 +280,7 @@ abortProcessing = StreamM (throwError Nothing)
 endProcessing :: Int -> StreamM a
 endProcessing i = do
   numChans <- StreamM $ asks (length . fst)
-  vals <- mapM (recievePacket <=< getStream) [x | x <- [0..numChans], x /= i]
+  vals <- mapM (recievePacket <=< getStream) [x | x <- [0..numChans - 1], x /= i]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
   if all isEOS vals then
     abortProcessing
@@ -303,7 +303,7 @@ recieveUntyped i =
     UserPacket u      -> return u
 
 recieveAllUntyped :: StreamM [Dynamic]
-recieveAllUntyped = StreamM (asks (length . fst)) >>= mapM recieveUntyped . enumFromTo 0
+recieveAllUntyped = StreamM (asks (length . fst)) >>= mapM recieveUntyped . enumFromTo 0 . pred
 
 recieve :: Typeable a => Int -> StreamM a
 recieve = fmap forceDynamic . recieveUntyped
@@ -329,7 +329,7 @@ collectOp (_ :: Proxy outputType) = do
 
 
 sizeOp :: Typeable inputType => Proxy inputType -> StreamM ()
-sizeOp (_ :: Proxy inputType) = send . dynApp (toDyn (length :: [inputType] -> Int)) =<< recieveUntyped 0
+sizeOp (_ :: Proxy inputType) = send . (length :: [inputType] -> Int) =<< recieve 0
 
 
 -- Running stateful functions as a Stream processor
@@ -380,7 +380,11 @@ mountStreamProcessor process inputs outputs = do
     safeProc
       | null inputs = process >> sendEOS >> abortProcessing
       | otherwise = forever process
+
       
+customAsync :: IO a -> IO (Async a)
+customAsync = async
+
 
 runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
 runAlgo (Algorithm nodes retVar) st = do
@@ -397,7 +401,7 @@ runAlgo (Algorithm nodes retVar) st = do
     let finalMap = Map.update (Just . (retStream:)) retVar outMap
 
     bracket
-        (mapM (async . \(nt, inChans, retUnique :: Unique) ->
+        (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
             let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
                 processor =
                   case nt of
