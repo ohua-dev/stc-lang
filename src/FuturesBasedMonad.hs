@@ -16,9 +16,9 @@ import           Control.Monad.State as S
 -- import Scheduler as P
 -- import Control.DeepSeq
 --
-import           Control.Parallel    (pseq)
+-- import           Control.Parallel    (pseq)
 import           Data.Set            as Set hiding (map)
-import           Debug.Trace
+-- import           Debug.Trace
 import           GHC.Generics        (Generic)
 import           System.IO.Unsafe
 
@@ -31,14 +31,10 @@ runSF :: SFM s b -> s -> (b,s)
 runSF = runState
 -- runSF = runStateT
 
--- newtype OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
---                                                  , s -- the global state
---                                                  ))
---                                                }
-data OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
-                                                , s -- the global state
-                                                ))
-                                              }
+newtype OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
+                                                 , s -- the global state
+                                                 ))
+                                               }
 
 data GlobalState s = GlobalState [IVar s] [IVar s] (Set.Set Int) deriving (Generic)
 instance NFData a => NFData (GlobalState a)
@@ -152,7 +148,7 @@ liftPar p = OhuaM $ \s -> (,s) <$> p
 
 {-# NOINLINE liftWithIndex #-}
 liftWithIndex :: forall s a b.(NFData s, Show a) => String -> Int -> SF s a b -> Int -> a -> OhuaM (GlobalState s) b
-liftWithIndex name i f ident d = do
+liftWithIndex _ i f _ d = do
   -- we define the proper order on the private state right here!
   GlobalState gsIn gsOut touchedState <- oget
   let ithIn = gsIn !! i
