@@ -31,10 +31,15 @@ runSF :: SFM s b -> s -> (b,s)
 runSF = runState
 -- runSF = runStateT
 
-newtype OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
-                                                 , s -- the global state
-                                                 ))
-                                               }
+-- newtype OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
+--                                                  , s -- the global state
+--                                                  ))
+--                                                }
+data OhuaM s a = OhuaM { runOhua :: s -> (Par ( a -- the result
+                                                , s -- the global state
+                                                ))
+                                              }
+
 data GlobalState s = GlobalState [IVar s] [IVar s] (Set.Set Int) deriving (Generic)
 instance NFData a => NFData (GlobalState a)
 
@@ -70,7 +75,35 @@ instance (NFData s) => Functor (OhuaM s) where
 
 instance NFData s => Applicative (OhuaM s) where
   pure = return
-  (<*>) = Control.Monad.ap -- FIXME implement true task-level parallelism here
+  -- TODO (<*>) = Control.Monad.ap  this is a requirement if the functor is also a monad.
+  -- this is the case so we should create a new functor that is not a monad but only an applicative.
+  -- in order to do so we need to provide a OhuaM computation in the new applicative functor that
+  -- can be ready executed via runOhua! - (Haxl doesn't care)
+  (<*>) :: forall a b.OhuaM s (a -> b) -> OhuaM s a -> OhuaM s b
+  f <*> a = OhuaM comp
+    where
+      comp :: s -> Par (b,s)
+      comp gs = do
+        -- run the action first. in the final monad code for OhuaM, the outermost <*>
+        -- will execute first. as a result of this code, we will recursively go and
+        -- spawn the tasks for the arguments which can happily execute in parallel
+        -- until we reach the bottom of the recursion, i.e., the pure function.
+        -- then the recursion unwinds again gathering all the results.
+        aVar <- spawn_ $ runOhua a gs -- TODO force evaluation here
+
+        -- run the function
+        (fResult, _) <- runOhua f gs
+
+        -- wrap it up by applying the function to the result of the action
+        (r,gs') <- P.get aVar
+        return (fResult r,gs')
+
+
+  -- mf@(OhuaM _) <*> mv@(OhuaM _) = Collected mf [mv]
+  -- mf@(OhuaM _) <*> (Collected pf sfs) = Collected mf (pf : sfs)
+  -- (Collected pf sfs) <*> mv@(OhuaM sf) = Collected pf sfs ++ [mv]
+  -- (Collected pf1 sfs1) <*> (Collected pf2 sfs2) = Collected pf1 (sfs1 ++ (pf2:sfs2))
+  --  -- this collecting is only stopped by the monadic bind operator!
 
 instance NFData s => Monad (OhuaM s) where
   {-# NOINLINE return #-}
