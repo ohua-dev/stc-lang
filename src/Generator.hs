@@ -19,8 +19,8 @@ yield = flip Yield
 
 -- At first I implemented all of the `Applicative` and `Monad` functions fully,
 -- that is to say with all the recursion down the source generator.
--- I was already suspecting a pattern there, because the recursino for both looked very similar,
--- I just couldn't wuite figure it out.
+-- I was already suspecting a pattern there, because the recursion for both looked very similar,
+-- I just couldn't quite figure it out.
 -- When suddenly something *magical* happened.
 -- I was looking at `Alternative`, because that instance is needed for `MonadComprehensions`
 -- and I was again reminded of just how similar `Alternative` is to `Monoid` and I realized that
