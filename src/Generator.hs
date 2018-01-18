@@ -3,8 +3,16 @@ module Generator where
 
 
 import           Control.Applicative
+import           Control.Arrow
+import           Control.Concurrent.MVar
 import           Control.Monad.State
+import           Data.Tuple
 
+------------------------------------------------------------------
+--
+-- The generator
+--
+------------------------------------------------------------------
 
 data Generator a
   = Finished
@@ -60,24 +68,41 @@ instance Monad Generator where
   NeedM m >>= f = NeedM $ (>>= f) <$> m
   Yield cont a >>= f = f a `mappend` (cont >>= f)
 
+-- | This is needed to get the Monad comprehensions
 instance Alternative Generator where
   empty = mempty
   (<|>) = mappend
 
+-- | IO can be embedded easily
 instance MonadIO Generator where
   liftIO = NeedM . fmap pure
-
-
-listGenerator :: [a] -> Generator a
-listGenerator []     = Finished
-listGenerator (x:xs) = Yield (listGenerator xs) x
-
 
 -- | Run a generator producing a list of output values
 runGenerator :: Generator a -> IO [a]
 runGenerator Finished    = pure []
 runGenerator (NeedM ac)  = ac >>= runGenerator
 runGenerator (Yield g a) = (a:) <$> runGenerator g
+
+
+-- | Run until the generator yields its first value or finishes.
+-- Returns the created value and a new generator which represents its updated internal state.
+runGeneratorOnce :: Generator a -> IO (Maybe (a, Generator a))
+runGeneratorOnce Finished    = pure Nothing
+runGeneratorOnce (NeedM ac)  = ac >>= runGeneratorOnce
+runGeneratorOnce (Yield g a) = pure $ Just (a, g)
+
+
+------------------------------------------------------------------
+--
+-- Creating generators
+--
+------------------------------------------------------------------
+
+
+
+listGenerator :: [a] -> Generator a
+listGenerator []     = Finished
+listGenerator (x:xs) = Yield (listGenerator xs) x
 
 
 -- | A generator crated with this will run until it returns `Nothing` in which case the generator finishes
@@ -87,6 +112,33 @@ stateToGenerator st s = NeedM $ do
   pure $ maybe Finished (Yield (stateToGenerator st s')) a
 
 
+
+------------------------------------------------------------------
+--
+-- Some more fun stuff that can be done with them
+--
+------------------------------------------------------------------
+
+-- One fun thing we can do in IO is put the generator in a mutable variable and then just pull values from that.
+
+type GenVar a = MVar (Generator a)
+
+mkGenIO :: Generator a -> IO (GenVar a)
+mkGenIO = newMVar
+
+-- | This pulls a new value from this var (if possible) and updates its state
+pull :: GenVar a -> IO (Maybe a)
+pull = flip modifyMVar $ fmap (maybe (Finished, Nothing) (second Just . swap)) . runGeneratorOnce
+
+
+
+------------------------------------------------------------------
+--
+-- Some examples of comprehensions, composition and state embedding
+--
+------------------------------------------------------------------
+
+
 permutations :: Generator (Int, Char)
 permutations =
   [ (i, c)
@@ -94,14 +146,14 @@ permutations =
   , c <- listGenerator ['a'..'f']
   ]
 
-nonReflexivePermutations :: Generator (Int, Int)
-nonReflexivePermutations =
+nonReflexivePermutations :: Int -> Generator (Int, Int)
+nonReflexivePermutations i =
   [ (a, b)
   | a <- ints
   , b <- ints
   , a /= b
   ]
-  where ints = listGenerator [0..9]
+  where ints = listGenerator [0..i]
 
 justSomeStuffWithInts :: Generator Int
 justSomeStuffWithInts = flip stateToGenerator 0 $ do
@@ -113,3 +165,15 @@ justSomeStuffWithInts = flip stateToGenerator 0 $ do
     else do
       liftIO $ putStrLn "We have reached 100" -- It can do IO as well ;)
       pure Nothing
+
+
+-- and they are all compatible and can be joined together (and depend on each other)
+
+-- Probably dont run this ... it creates a **lot** of output
+crazy :: Generator (Int, Int, Char)
+crazy =
+  [ (a + b, a * d, c)
+  | i <- justSomeStuffWithInts
+  , (b, d) <- nonReflexivePermutations i
+  , (a, c) <- permutations
+  ]
