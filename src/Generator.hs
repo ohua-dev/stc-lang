@@ -1,4 +1,6 @@
-{-# LANGUAGE MonadComprehensions #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MonadComprehensions    #-}
+{-# LANGUAGE MultiParamTypeClasses  #-}
 module Generator where
 
 
@@ -177,3 +179,26 @@ crazy =
   , (b, d) <- nonReflexivePermutations i
   , (a, c) <- permutations
   ]
+
+
+------------------------------------------------------------------
+--
+-- A generator interface
+--
+------------------------------------------------------------------
+
+
+-- Something I thought of this morning.
+-- There could also be a generic interface for generators
+
+
+-- | A generator @g@ that runs in the monad @m@
+class Monad m => IsGenerator g m | g -> m where
+  advance :: g a -> m (Maybe (a, g a))
+  genToList :: g a -> m [a]
+  genToList g = advance g >>= maybe (pure []) (\(a, ng) -> (a:) <$> genToList ng)
+
+
+instance IsGenerator Generator IO where
+  advance = runGeneratorOnce
+  genToList = runGenerator
