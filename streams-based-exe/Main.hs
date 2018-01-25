@@ -3,4 +3,4 @@
 import           StreamsBasedFreeMonad
 
 
-main = print =<< runAlgo algorithm 0
+main = print =<< flip runAlgo 0 =<< algorithm
