@@ -43,7 +43,8 @@ import           Control.Concurrent.Chan
 import           Control.Exception
 import           Control.Monad.Free
 -- import           Control.Parallel         (pseq)
-import           Data.Dynamic
+import           Data.Default.Class
+import           Data.Dynamic2
 import           Data.IORef
 import           Data.Kind
 import           Data.List                (sortOn)
@@ -55,9 +56,15 @@ import           Debug.Trace
 import           Lens.Micro
 import           Lens.Micro.Mtl
 import qualified Ohua.ALang.Lang          as L
+import qualified Ohua.ALang.Refs          as ARefs
+import           Ohua.Compile
 import qualified Ohua.DFGraph             as G
+import           Ohua.DFLang.Lang         (DFFnRef (..))
+import qualified Ohua.DFLang.Refs         as DFRefs
 import           Ohua.Monad
 import           Ohua.Types
+import qualified Ohua.Util.Str            as Str
+import           Unsafe.Coerce
 
 
 -- Utils
@@ -79,6 +86,22 @@ instance Exception TypeCastException where
   displayException (TypeCastException expected recieved) =
     "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
 
+extractList :: Dynamic -> [Dynamic]
+extractList (Dynamic trl dl) = map f l
+  where
+    f = Dynamic tra
+    [tra] = typeRepArgs trl
+    l = unsafeCoerce dl
+
+intractList :: [Dynamic] -> Dynamic
+intractList [] = error "Cannot convert empty list yet"
+intractList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
+  where
+    unwrap (Dynamic _ v) = v
+    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [Any]))) [tra]
+
+united :: Lens' s ()
+united f s = (const s) <$> f ()
 
 -- The free monad
 
@@ -263,6 +286,8 @@ data Node globalState = Node
 
 data Algorithm globalState a = Algorithm [Node globalState] Unique
 
+
+
 type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
 
 type UDict = Map.Map Unique Binding
@@ -276,17 +301,22 @@ instance Monoid (Mutator a) where
   mempty = Mutator id
   Mutator m1 `mappend` Mutator m2 = Mutator $ m1 . m2
 
-newtype EvalASTM s a = EvalASTM { runEvalASTM :: RWS
-                                                   ()
-                                                   (Mutator L.Expression)
-                                                   ( FunctionDict s
-                                                   , UDict
-                                                   , NameGenerator
-                                                   , NameGenerator
-                                                   , Unique
-                                                   )
-                                                   a }
-  deriving (Functor, Applicative, Monad, MonadWriter (Mutator L.Expression))
+newtype EvalASTM s a = EvalASTM
+  { runEvalASTM :: RWS
+                     ()
+                     (Mutator L.Expression)
+                     ( FunctionDict s
+                     , UDict
+                     , NameGenerator
+                     , NameGenerator
+                     , Unique
+                     )
+                     a
+  } deriving ( Functor
+             , Applicative
+             , Monad
+             , MonadWriter (Mutator L.Expression)
+             )
 
 class FreshUnique m where
   freshUnique :: m Unique
@@ -297,13 +327,15 @@ instance FreshUnique (EvalASTM s) where
 tellMut :: MonadWriter (Mutator a) m => (a -> a) -> m ()
 tellMut = tell . Mutator
 
-defaultFunctionDict :: FunctionDict s
-defaultFunctionDict = mempty -- TODO add smap and friends
-
 evalASTM :: EvalASTM s a -> (FunctionDict s, L.Expression -> L.Expression, a)
 evalASTM (EvalASTM ac) = (d, m, a)
   where
-    (a, (d, _, _, _, _), Mutator m) = runRWS ac () (defaultFunctionDict, mempty, initNameGen mempty, initNameGen mempty, Unique 0)
+    (a, (d, _, _, _, _), Mutator m) = runRWS ac () ( defaultFunctionDict
+                                                   , mempty
+                                                   , initNameGen mempty
+                                                   , initNameGen mempty
+                                                   , Unique 0
+                                                   )
 
 instance MonadGenBnd (EvalASTM s) where
   generateBinding = EvalASTM $ generateBindingIn _3
@@ -334,6 +366,41 @@ mkRegVar = do
   EvalASTM $ _2 . at u .= Just b
   pure (Var u, b)
 
+dfFnRefName :: DFFnRef -> QualifiedBinding
+dfFnRefName (EmbedSf n)    = n
+dfFnRefName (DFFunction n) = n
+
+
+defaultFunctionDict :: FunctionDict s
+defaultFunctionDict =
+  [ (dfFnRefName DFRefs.smapFun, StreamProcessor $ do
+        [size, v] <- recieveAllUntyped
+        mapM_ sendUntyped $ extractList v)
+  , (dfFnRefName DFRefs.collect, StreamProcessor $ do
+        size <- recieve 1
+        vs <- sequence $ replicate size $ recieveUntyped 0
+        sendUntyped $ intractList vs)
+  , (dfFnRefName DFRefs.oneToN, StreamProcessor $ do
+        size <- recieve 0
+        v <- recieveUntyped 1
+        sequence_ $ replicate size $ sendUntyped v)
+  , (dfFnRefName DFRefs.scope, StreamProcessor $ do
+        b <- recieve 0
+        val <- recieveUntyped 1
+        if b
+          then sendUntyped val
+          else pure ())
+  , (dfFnRefName DFRefs.bool, StreamProcessor $ do
+        b <- recieve 0
+        send (b, not b))
+  , (dfFnRefName DFRefs.switch, StreamProcessor $ do
+        b <- recieve 0
+        sendUntyped =<< recieveUntyped (if b then 1 else 2))
+  , ("ohua.lang/fstBool", CallSf $ SfRef (liftSf $ sfm . pure . (fst :: (Bool, Bool) -> Bool)) united)
+  , ("ohua.lang/sndBool", CallSf $ SfRef (liftSf $ sfm . pure . (snd :: (Bool, Bool) -> Bool)) united)
+  ]
+
+
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
 evaluateAST (ASTM m) = (dict, build e)
   where
@@ -349,14 +416,18 @@ evaluateAST (ASTM m) = (dict, build e)
       cont rv
     go (Smap
          (innerCont :: Var inputType -> ASTM globalState (Var returnType))
-         (Var inputVar)
+         inputVar
          cont) = do
       (innerContVar, innerContBnd) <- mkRegVar
       let ASTM inner = innerCont innerContVar
       (e, Mutator build) <- censor (const mempty) $ listen $ iterM go inner
       resBnd <- varToBnd e
+      inpBnd <- varToBnd inputVar
       (smapResVar, smapResBnd) <- mkRegVar
-      tellMut $ L.Let (Direct smapResBnd) (L.Lambda (Direct innerContBnd) $ build (L.Var (L.Local resBnd)))
+      tellMut $ L.Let (Direct smapResBnd) (L.Var (L.Sf ARefs.smap Nothing)
+                                           `L.Apply` L.Lambda (Direct innerContBnd) (build (L.Var (L.Local resBnd)))
+                                           `L.Apply` L.Var (L.Local inpBnd)
+                                          )
       cont smapResVar
       where
         iproxy = Proxy :: Proxy inputType
@@ -378,7 +449,7 @@ graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) undef
         )
 
 runCompiler :: L.Expression -> IO G.OutGraph
-runCompiler = undefined
+runCompiler = fmap (either (error . Str.toString) id) . runExceptT . runStderrLoggingT . compile def def
 
 -- The stream backend
 
@@ -459,26 +530,10 @@ recieve = fmap forceDynamic . recieveUntyped
 
 -- TODO make this type safe at some point
 send :: Typeable a => a -> StreamM ()
-send = sendPacket . UserPacket . toDyn
+send = sendUntyped . toDyn
 
-
--- Built in operators
-
-
-smapIn :: Typeable inputType => Proxy inputType -> StreamM ()
-smapIn (_ :: Proxy inputType) = do
-  val <- recieve 0
-  mapM_ send (val :: [inputType])
-
-
-collectOp :: Typeable outputType => Proxy outputType -> StreamM ()
-collectOp (_ :: Proxy outputType) = do
-  i <- recieve 0
-  (send :: [outputType] -> StreamM () ) =<< sequence (replicate i $ recieve 1)
-
-
-sizeOp :: Typeable inputType => Proxy inputType -> StreamM ()
-sizeOp (_ :: Proxy inputType) = send . (length :: [inputType] -> Int) =<< recieve 0
+sendUntyped :: Dynamic -> StreamM ()
+sendUntyped = sendPacket . UserPacket
 
 
 -- Running stateful functions as a Stream processor
