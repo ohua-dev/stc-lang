@@ -12,7 +12,11 @@
 {-# LANGUAGE InstanceSigs               #-}
 {-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE NamedFieldPuns             #-}
+{-# LANGUAGE OverloadedLists            #-}
+{-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE Rank2Types                 #-}
+{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
@@ -25,6 +29,7 @@ module StreamsBasedFreeMonad where
 import           Control.Monad
 import           Control.Monad.Except
 -- import           Control.Monad.Par        as P
+import           Control.Arrow            (first)
 import           Control.Monad.Reader
 import           Control.Monad.RWS        as RWS
 import           Control.Monad.State      as S
@@ -38,14 +43,28 @@ import           Control.Concurrent.Chan
 import           Control.Exception
 import           Control.Monad.Free
 -- import           Control.Parallel         (pseq)
-import           Data.Dynamic
+import           Data.Default.Class
+import           Data.Dynamic2
 import           Data.IORef
 import           Data.Kind
+import           Data.List                (sortOn)
+import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
 import           Data.Void
 import           Debug.Trace
 import           Lens.Micro
+import           Lens.Micro.Mtl
+import qualified Ohua.ALang.Lang          as L
+import qualified Ohua.ALang.Refs          as ARefs
+import           Ohua.Compile
+import qualified Ohua.DFGraph             as G
+import           Ohua.DFLang.Lang         (DFFnRef (..))
+import qualified Ohua.DFLang.Refs         as DFRefs
+import           Ohua.Monad
+import           Ohua.Types
+import qualified Ohua.Util.Str            as Str
+import           Unsafe.Coerce
 
 
 -- Utils
@@ -56,9 +75,33 @@ import           Lens.Micro
 forceDynamic :: forall a . Typeable a => Dynamic -> a
 forceDynamic dyn
   | Just a <- fromDynamic dyn = a
-  | otherwise =  error $ "Mismatching types. Expected " ++ show rep ++ " got " ++ show (dynTypeRep dyn)
+  | otherwise = throw $ TypeCastException rep (dynTypeRep dyn)
   where rep = typeRep (Proxy :: Proxy a)
 
+
+data TypeCastException = TypeCastException TypeRep TypeRep
+  deriving (Typeable, Show)
+
+instance Exception TypeCastException where
+  displayException (TypeCastException expected recieved) =
+    "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
+
+extractList :: Dynamic -> [Dynamic]
+extractList (Dynamic trl dl) = map f l
+  where
+    f = Dynamic tra
+    [tra] = typeRepArgs trl
+    l = unsafeCoerce dl
+
+intractList :: [Dynamic] -> Dynamic
+intractList [] = error "Cannot convert empty list yet"
+intractList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
+  where
+    unwrap (Dynamic _ v) = v
+    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [Any]))) [tra]
+
+united :: Lens' s ()
+united f s = (const s) <$> f ()
 
 -- The free monad
 
@@ -70,13 +113,6 @@ data Unique = Unique { uniqueToInt :: Int } deriving (Ord, Eq)
 instance Enum Unique where
   fromEnum = uniqueToInt
   toEnum = Unique
-
--- | Create a new unique thing
-freshUnique :: MonadState Unique m => m Unique
-freshUnique = do
-  modify succ
-  S.get
-
 
 -- | A type tagged tracker for where data flows inside the program
 newtype Var t = Var { unwrapVar :: Unique }
@@ -150,6 +186,18 @@ liftSf :: ( ReturnType f ~ SfMonad state ret
           , ApplyVars f)
        => f -> Sf f
 liftSf f = Sf f
+
+
+-- | A convenience function.
+-- It doesn't actually do anything (@sfm = id@) but it has a concrete type and therefore
+-- can be used to help the compiler when it infers the type of a function pased to 'liftSf'.
+--
+-- Because of the type level computation used on the function type the functions
+-- often have to be annotated like so @liftSf (\\... -> ... :: SfMonad t0 t1)@
+-- or otherwise the compiler is unable to infer the type.
+-- The same can be achieved with this function @liftSf (\\... -> sfm $ ...)@.
+sfm :: SfMonad s a -> SfMonad s a
+sfm = id
 
 
 -- | Map a function type by wrapping each argument in a type with kind @* -> *@
@@ -239,42 +287,169 @@ data Node globalState = Node
 data Algorithm globalState a = Algorithm [Node globalState] Unique
 
 
--- | Evaluate the AST Monad and ceate a graph
-createAlgo :: ASTM s (Var a) -> Algorithm s a
-createAlgo (ASTM m) = Algorithm w retVar
+
+type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
+
+type UDict = Map.Map Unique Binding
+
+-- | This type onlt exists to overwrite the implementation of 'Monoid' for functions.
+-- It changes 'mappend' to be '(.)' which enabes me to use this Monoid in the 'EvalASTM' as
+-- writer.
+newtype Mutator a = Mutator { mutAsFn :: a -> a }
+
+instance Monoid (Mutator a) where
+  mempty = Mutator id
+  Mutator m1 `mappend` Mutator m2 = Mutator $ m1 . m2
+
+newtype EvalASTM s a = EvalASTM
+  { runEvalASTM :: RWS
+                     ()
+                     (Mutator L.Expression)
+                     ( FunctionDict s
+                     , UDict
+                     , NameGenerator
+                     , NameGenerator
+                     , Unique
+                     )
+                     a
+  } deriving ( Functor
+             , Applicative
+             , Monad
+             , MonadWriter (Mutator L.Expression)
+             )
+
+class FreshUnique m where
+  freshUnique :: m Unique
+
+instance FreshUnique (EvalASTM s) where
+  freshUnique = EvalASTM $ (_5 %= succ) >> use _5
+
+tellMut :: MonadWriter (Mutator a) m => (a -> a) -> m ()
+tellMut = tell . Mutator
+
+evalASTM :: EvalASTM s a -> (FunctionDict s, L.Expression -> L.Expression, a)
+evalASTM (EvalASTM ac) = (d, m, a)
   where
-    (Var retVar, _, w) = runRWS (iterM go m) () (Unique 0)
-    go :: ASTAction s (RWS () [Node s] Unique b) -> RWS () [Node s] Unique b
-    go (InvokeSf sf tag vars cont) =
-      continue cont $ Node (CallSf $ SfRef sf tag) (map unwrapVar vars)
+    (a, (d, _, _, _, _), Mutator m) = runRWS ac () ( defaultFunctionDict
+                                                   , mempty
+                                                   , initNameGen mempty
+                                                   , initNameGen mempty
+                                                   , Unique 0
+                                                   )
+
+instance MonadGenBnd (EvalASTM s) where
+  generateBinding = EvalASTM $ generateBindingIn _3
+  generateBindingWith = EvalASTM . generateBindingWithIn _3
+
+generateSFunctionName :: EvalASTM s QualifiedBinding
+generateSFunctionName = EvalASTM $ QualifiedBinding ["__generated"] <$> generateBindingIn _4
+
+-- | Evaluate the AST Monad and ceate a graph
+createAlgo :: ASTM s (Var a) -> IO (Algorithm s a)
+createAlgo astm = graphToAlgo dict <$> runCompiler expr
+  where
+    (dict, expr) = evaluateAST astm
+
+registerFunction :: NodeType s -> EvalASTM s QualifiedBinding
+registerFunction n = do
+  name <- generateSFunctionName
+  EvalASTM $ _1 . at name .= Just n
+  pure name
+
+varToBnd :: Var a -> EvalASTM s Binding
+varToBnd (Var u) = EvalASTM $ fromMaybe (error "bindings must be defined before use") <$> preuse (_2 . ix u)
+
+mkRegVar :: EvalASTM s (Var a, Binding)
+mkRegVar = do
+  b <- generateBinding
+  u <- freshUnique
+  EvalASTM $ _2 . at u .= Just b
+  pure (Var u, b)
+
+dfFnRefName :: DFFnRef -> QualifiedBinding
+dfFnRefName (EmbedSf n)    = n
+dfFnRefName (DFFunction n) = n
+
+
+defaultFunctionDict :: FunctionDict s
+defaultFunctionDict =
+  [ (dfFnRefName DFRefs.smapFun, StreamProcessor $ do
+        [size, v] <- recieveAllUntyped
+        mapM_ sendUntyped $ extractList v)
+  , (dfFnRefName DFRefs.collect, StreamProcessor $ do
+        size <- recieve 1
+        vs <- sequence $ replicate size $ recieveUntyped 0
+        sendUntyped $ intractList vs)
+  , (dfFnRefName DFRefs.oneToN, StreamProcessor $ do
+        size <- recieve 0
+        v <- recieveUntyped 1
+        sequence_ $ replicate size $ sendUntyped v)
+  , (dfFnRefName DFRefs.scope, StreamProcessor $ do
+        b <- recieve 0
+        val <- recieveUntyped 1
+        if b
+          then sendUntyped val
+          else pure ())
+  , (dfFnRefName DFRefs.bool, StreamProcessor $ do
+        b <- recieve 0
+        send (b, not b))
+  , (dfFnRefName DFRefs.switch, StreamProcessor $ do
+        b <- recieve 0
+        sendUntyped =<< recieveUntyped (if b then 1 else 2))
+  , ("ohua.lang/fstBool", CallSf $ SfRef (liftSf $ sfm . pure . (fst :: (Bool, Bool) -> Bool)) united)
+  , ("ohua.lang/sndBool", CallSf $ SfRef (liftSf $ sfm . pure . (snd :: (Bool, Bool) -> Bool)) united)
+  ]
+
+
+evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
+evaluateAST (ASTM m) = (dict, build e)
+  where
+    (dict, build, e) = evalASTM $ do
+      v <- iterM go m
+      L.Var . L.Local <$> varToBnd v
+    go :: ASTAction s (EvalASTM s (Var a)) -> EvalASTM s (Var a)
+    go (InvokeSf sf tag vars cont) = do
+      n <- registerFunction (CallSf $ SfRef sf tag)
+      (rv, rb) <- mkRegVar
+      vars' <- mapM varToBnd vars
+      tellMut $ L.Let (Direct rb) (foldl L.Apply (L.Var (L.Sf n Nothing)) (map (L.Var . L.Local) vars'))
+      cont rv
     go (Smap
          (innerCont :: Var inputType -> ASTM globalState (Var returnType))
-         (Var inputVar)
+         inputVar
          cont) = do
-      innerContVar <- freshUnique
-      sizeRet <- freshUnique
-      tell
-          [ Node (StreamProcessor $ smapIn iproxy) [inputVar] innerContVar
-          , Node (StreamProcessor $ sizeOp iproxy) [inputVar] sizeRet
-          ]
-      let ASTM inner = innerCont (Var innerContVar)
-      v <- iterM go inner
-      continue
-        cont
-        (Node
-          (StreamProcessor (collectOp (Proxy :: Proxy returnType)))
-            [sizeRet, unwrapVar v])
+      (innerContVar, innerContBnd) <- mkRegVar
+      let ASTM inner = innerCont innerContVar
+      (e, Mutator build) <- censor (const mempty) $ listen $ iterM go inner
+      resBnd <- varToBnd e
+      inpBnd <- varToBnd inputVar
+      (smapResVar, smapResBnd) <- mkRegVar
+      tellMut $ L.Let (Direct smapResBnd) (L.Var (L.Sf ARefs.smap Nothing)
+                                           `L.Apply` L.Lambda (Direct innerContBnd) (build (L.Var (L.Local resBnd)))
+                                           `L.Apply` L.Var (L.Local inpBnd)
+                                          )
+      cont smapResVar
       where
         iproxy = Proxy :: Proxy inputType
 
-    continue :: (Var t -> RWS () [Node s] Unique b)
-             -> (Unique -> Node s)
-             -> RWS () [Node s] Unique b
-    continue cont f = do
-      u <- freshUnique
-      tell $ pure $ f u
-      cont (Var u)
+graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a -- yeah ... have to figure out where `a` comes from ... not sure yet how
+graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) undefined -- I dont know where i should find this var right now ...
+  where
+    buildOp G.Operator{..} = Node (dict ! operatorType) (argDict ! operatorId)
+    opWRet = zip operators [Unique 0..]
+    retDict = Map.fromList $ map (first G.operatorId) opWRet
+    -- The `sortOn` here is dangerous. it relies on there being *exactly one* input present for every
+    -- argument to the function. If that invariant is broken we will not detect it here but get runtime errors
+    argDict = fmap (map snd . sortOn fst) $ Map.fromListWith (++) $ map arcToUnique arcs
+    arcToUnique G.Arc{G.target=G.Target{G.operator}, source=src}
+      = ( operator
+        , case src of
+            G.LocalSource G.Target{..} -> pure (index, retDict ! operator)
+            _                          -> error "invariant broken"
+        )
 
+runCompiler :: L.Expression -> IO G.OutGraph
+runCompiler = fmap (either (error . Str.toString) id) . runExceptT . runStderrLoggingT . compile def def
 
 -- The stream backend
 
@@ -316,7 +491,7 @@ createStream = do
 sendPacket :: Packet Dynamic -> StreamM ()
 sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< asks snd
 
--- | Stop processing immediately. No subsequent acrions are performed.
+-- | Stop processing immediately. No subsequent actions are performed.
 abortProcessing :: StreamM a
 abortProcessing = StreamM (throwError Nothing)
 
@@ -326,10 +501,11 @@ endProcessing i = do
   numChans <- StreamM $ asks (length . fst)
   vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], x /= i]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
-  if all isEOS vals then
-    abortProcessing
-  else
-    StreamM $ throwError (Just ())
+  if all isEOS vals
+    then abortProcessing
+    else
+      -- eventually we'll want to send some information here which port had data left over in it
+      StreamM $ throwError (Just ())
 
 sendEOS :: StreamM ()
 sendEOS = sendPacket EndOfStreamPacket
@@ -354,26 +530,10 @@ recieve = fmap forceDynamic . recieveUntyped
 
 -- TODO make this type safe at some point
 send :: Typeable a => a -> StreamM ()
-send = sendPacket . UserPacket . toDyn
+send = sendUntyped . toDyn
 
-
--- Built in operators
-
-
-smapIn :: Typeable inputType => Proxy inputType -> StreamM ()
-smapIn (_ :: Proxy inputType) = do
-  val <- recieve 0
-  mapM_ send (val :: [inputType])
-
-
-collectOp :: Typeable outputType => Proxy outputType -> StreamM ()
-collectOp (_ :: Proxy outputType) = do
-  i <- recieve 0
-  (send :: [outputType] -> StreamM () ) =<< sequence (replicate i $ recieve 1)
-
-
-sizeOp :: Typeable inputType => Proxy inputType -> StreamM ()
-sizeOp (_ :: Proxy inputType) = send . (length :: [inputType] -> Int) =<< recieve 0
+sendUntyped :: Dynamic -> StreamM ()
+sendUntyped = sendPacket . UserPacket
 
 
 -- Running stateful functions as a Stream processor
@@ -494,19 +654,19 @@ stag :: Accessor s ()
 stag = lens (const ()) const
 
 sf1 :: ASTM s (Var T)
-sf1 = call (liftSf (liftIO (putStrLn "Executing sf1") >> pure T :: SfMonad () T)) stag
+sf1 = call (liftSf (sfm $ liftIO (putStrLn "Executing sf1") >> pure T)) stag
 
 sf2 :: Var T -> ASTM s (Var [Int])
-sf2 = call (liftSf (\T -> liftIO (putStrLn "Executing sf2") >> return [0..20] :: SfMonad () [Int])) stag
+sf2 = call (liftSf (\T -> sfm $ liftIO (putStrLn "Executing sf2") >> return [0..20])) stag
 
 sf3 :: Var T -> Var Int -> ASTM s (Var Int)
-sf3 = call (liftSf (\T i -> liftIO (putStrLn "Executing sf3") >> return (succ i) :: SfMonad () Int)) stag
+sf3 = call (liftSf (\T i -> sfm $ liftIO (putStrLn "Executing sf3") >> return (succ i))) stag
 
 aggregate :: Var Int -> ASTM Int (Var Int)
-aggregate = call (liftSf (\i -> S.modify (+ i) >> S.get :: SfMonad Int Int)) (lens id (const id))
+aggregate = call (liftSf (\i -> sfm $ S.modify (+ i) >> S.get)) (lens id (const id))
 
 
-algorithm :: Algorithm Int [Int]
+algorithm :: IO (Algorithm Int [Int])
 algorithm = createAlgo $ do
   var1 <- sf1
   var3 <- sf2 var1
