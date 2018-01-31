@@ -30,7 +30,7 @@ import           Control.Monad.Except
 -- import           Control.Monad.Par        as P
 import           Control.Arrow            (first, (&&&), (***))
 import           Control.Monad.Reader
-import           Control.Monad.RWS        as RWS hiding (Any)
+import           Control.Monad.RWS        as RWS
 import           Control.Monad.State      as S
 --
 -- for debugging only:
@@ -53,7 +53,6 @@ import qualified Data.Map                 as Map
 import           Data.Maybe
 import           Data.Void
 import           Debug.Trace
-import           GHC.Prim                 (Any)
 import           Lens.Micro
 import           Lens.Micro.Mtl
 import qualified Ohua.ALang.Lang          as L
@@ -67,7 +66,6 @@ import           Ohua.ParseTools.Refs     (ohuaLangNS)
 import           Ohua.Types
 import           Ohua.Unit
 import qualified Ohua.Util.Str            as Str
-import           Prelude                  hiding (Any)
 import           Unsafe.Coerce
 
 
@@ -97,9 +95,9 @@ extractList (Dynamic trl dl) = map f l
     [tra] = typeRepArgs trl
     l = unsafeCoerce dl
 
-intractList :: [Dynamic] -> Dynamic
-intractList [] = error "Cannot convert empty list yet"
-intractList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
+injectList :: [Dynamic] -> Dynamic
+injectList [] = error "Cannot convert empty list yet"
+injectList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
   where
     unwrap (Dynamic _ v) = v
     tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [()]))) [tra]
@@ -185,6 +183,7 @@ newtype ASTM globalState a = ASTM (Free (ASTAction globalState) a)
 instance Functor (ASTAction globalState) where
   fmap f (InvokeSf sf tag vars ac) = InvokeSf sf tag vars (f . ac)
   fmap f (Smap f1 v cont)          = Smap f1 v (f . cont)
+  fmap f (If v th el cont)         = If v th el (f . cont)
 
 
 -- | This type level function retrieves the return type of a function with any arity.
@@ -307,13 +306,14 @@ data SfRef globalState
 -- more powerful and does its own dataflow processing.
 data NodeType globalState
   = CallSf (SfRef globalState)
-  | StreamProcessor (StreamM ())
+  | StreamProcessor (StreamInit ())
 
 
 data Node globalState = Node
-  { nodeType  :: NodeType globalState
-  , inputRefs :: [Unique]
-  , outputRef :: Unique
+  { nodeDescription :: QualifiedBinding
+  , nodeType        :: NodeType globalState
+  , inputRefs       :: [Unique]
+  , outputRef       :: Unique
   }
 
 data Algorithm globalState a = Algorithm [Node globalState] Unique
@@ -423,34 +423,50 @@ captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
 
 defaultFunctionDict :: FunctionDict s
 defaultFunctionDict = Map.fromList $
-  [ (dfFnRefName DFRefs.smapFun, undefined)
-  , (dfFnRefName DFRefs.collect, StreamProcessor $ do
-        size <- recieve 1
-        vs <- sequence $ replicate size $ recieveUntyped 0
-        sendUntyped $ intractList vs)
-  , (dfFnRefName DFRefs.oneToN, StreamProcessor $ do
-        size <- recieve 0
-        v <- recieveUntyped 1
-        sequence_ $ replicate size $ sendUntyped v)
-  , (dfFnRefName DFRefs.scope, StreamProcessor $ do
-        b <- recieve 0
-        val <- recieveUntyped 1
-        if b
-          then sendUntyped val
-          else pure ())
-  , (dfFnRefName DFRefs.bool, StreamProcessor $ do
-        b <- recieve 0
-        send (b, not b))
-  , (dfFnRefName DFRefs.switch, StreamProcessor $ do
-        b <- recieve 0
-        sendUntyped =<< recieveUntyped (if b then 1 else 2))
-  , (captureSingleton, StreamProcessor $ recieveUntyped 0 >>= sendUntyped)
-  , (dfFnRefName DFRefs.size, StreamProcessor $ do
-        coll <- recieveUntyped 0
-        send $ length (extractList coll))
-  ] ++ map (dN &&& destructOp) [0..4]
+  (captureSingleton, StreamProcessor $ pure $ recieveUntyped 0 >>= \v -> liftIO (putStrLn "recieved a final value") >> sendUntyped v)
+  : map (first dfFnRefName)
+    [ (DFRefs.smapFun, StreamProcessor $ do
+          stateVar <- liftIO $ newIORef []
+          pure $ do
+            l <- recieveUntyped 0
+            sendUntyped =<<
+              liftIO (atomicModifyIORef' stateVar
+                      $ \case
+                           [] -> case extractList l of
+                                   []     -> error "new input list was empty"
+                                   (x:xs) -> (xs, x)
+                           (x:xs) -> (xs, x))
+      )
+    , (DFRefs.collect, StreamProcessor $ pure $ do
+          size <- recieve 0
+          liftIO $ putStrLn "Recieved a size"
+          sequence $ replicate (pred size) $ recieveUntyped 0
+          vs <- sequence $ replicate size $ recieveUntyped 1
+          liftIO $ putStrLn "Collecting done"
+          sendUntyped $ injectList vs)
+    , (DFRefs.oneToN, StreamProcessor $ pure $ do
+          size <- recieve 0
+          v <- recieveUntyped 1
+          sequence_ $ replicate size $ sendUntyped v)
+    , (DFRefs.scope, StreamProcessor $ pure $ do
+          b <- recieve 0
+          val <- recieveUntyped 1
+          if b
+            then sendUntyped val
+            else pure ())
+    , (DFRefs.bool, StreamProcessor $ pure $ do
+          b <- recieve 0
+          send (b, not b))
+    , (DFRefs.select, StreamProcessor $ pure $ do
+          b <- recieve 0
+          sendUntyped =<< recieveUntyped (if b then 1 else 2))
+    , (DFRefs.size, StreamProcessor $ pure $ do
+          coll <- recieveUntyped 0
+          send $ length (extractList coll))
+    ]
+  ++ map (dN &&& destructOp) [0..4]
   where
-    destructOp n = StreamProcessor $ recieveUntyped 0 >>= sendUntyped . destructureTuple n
+    destructOp n = StreamProcessor $ pure $ recieveUntyped 0 >>= sendUntyped . destructureTuple n
 
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
@@ -500,7 +516,7 @@ newtype GenIdM a = GenIdM { unwrapGenIdM :: S.State FnId a }
 
 instance MonadGenId GenIdM where
   generateId = GenIdM $ modify succ >> get
-  resetIdCounter = undefined
+  resetIdCounter = GenIdM . put
 
 runGenIdM :: GenIdM a -> FnId -> a
 runGenIdM = evalState . unwrapGenIdM
@@ -534,11 +550,12 @@ makeDestructuringExplicit G.OutGraph{G.operators, G.arcs} = G.OutGraph (operator
 graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a
 graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastArg
   where
-    buildOp G.Operator{..} = Node (dict ! operatorType)
+    buildOp G.Operator{..} = Node operatorType
+                                  (dict ! operatorType)
                                   (fromMaybe [] $ Map.lookup operatorId argDict)
     opWRet = zip operators [Unique 0..]
     retDict = Map.fromList $ map (first G.operatorId) opWRet
-    lastArg = fromMaybe (error "no copture op") $ lookup captureSingleton $ map (first G.operatorType) opWRet
+    lastArg = fromMaybe (error "no capture op") $ lookup captureSingleton $ map (first G.operatorType) opWRet
     -- The `sortOn` here is dangerous. it relies on there being *exactly one* input present for every
     -- argument to the function. If that invariant is broken we will not detect it here but get runtime errors
     argDict = fmap (map snd . sortOn fst) $ Map.fromListWith (++) $ map arcToUnique arcs
@@ -586,6 +603,8 @@ newtype StreamM a = StreamM
   { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Source Dynamic], [Sink Dynamic]) IO) a
   } deriving (Functor, Applicative, Monad, MonadIO)
 
+type StreamInit a = StreamM (StreamM a)
+
 -- | Create a stream with a end that can only be sent to and one that can only be read from.
 createStream :: IO (Sink a, Source a)
 createStream = (Sink . writeChan &&& Source . readChan) <$> newChan
@@ -599,16 +618,22 @@ abortProcessing :: StreamM a
 abortProcessing = StreamM (throwError Nothing)
 
 -- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
-endProcessing :: Int -> StreamM a
-endProcessing i = do
+endProcessingAt :: (Int -> Bool) -> StreamM a
+endProcessingAt p = do
   numChans <- StreamM $ asks (length . fst)
-  vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], x /= i]
+  vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], p x]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
   if all isEOS vals
     then abortProcessing
     else
       -- eventually we'll want to send some information here which port had data left over in it
       StreamM $ throwError (Just ())
+
+endProcessing :: Int -> StreamM a
+endProcessing = endProcessingAt . (/=)
+
+expectFinish :: StreamM a
+expectFinish = endProcessingAt $ const True
 
 sendEOS :: StreamM ()
 sendEOS = sendPacket EndOfStreamPacket
@@ -665,8 +690,8 @@ instance ApplyVars (SfMonad state retType) where
 -- | Given a reference for a stateful function run it as a stream processor
 runFunc :: SfRef globalState
         -> IORef globalState
-        -> StreamM ()
-runFunc (SfRef (Sf f) accessor) stTrack = do
+        -> StreamInit ()
+runFunc (SfRef (Sf f) accessor) stTrack = pure $ do
   inVars <- recieveAllUntyped
   s <- liftIO $ readIORef stTrack
   (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
@@ -677,17 +702,19 @@ runFunc (SfRef (Sf f) accessor) stTrack = do
 -- Running the stream
 
 
-mountStreamProcessor :: StreamM () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
-mountStreamProcessor process inputs outputs = do
-  result <- runReaderT (runExceptT $ runStreamM $ forever safeProc) (inputs, outputs)
+mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
+mountStreamProcessor name process inputs outputs = do
+  result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
-    Left Nothing  -> pure () -- EOS marker appeared, this is what *should* happen
-    Left (Just _) -> error "There were packets left over when a processor exited"
-    Right () -> error "impossible"
+    Left Nothing  -> putStrLn $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
+    Left (Just _) -> putStrLn $ show name ++ " finished with leftover packets" --error "There were packets left over when a processor exited"
+    Right ()      -> error "impossible"
   where
-    safeProc
-      | null inputs = process >> sendEOS >> abortProcessing
-      | otherwise = forever process
+    safeProc = do
+      proc_ <- process
+      if null inputs
+        then proc_ >> expectFinish
+        else forever proc_
 
 
 customAsync :: IO a -> IO (Async a)
@@ -701,10 +728,10 @@ runAlgo (Algorithm nodes retVar) st = do
   stateVar <- newIORef st
   let outputMap :: Map.Map Unique [Sink Dynamic]
       outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-      f (m, l) (Node func inputs oUnique) = do
+      f (m, l) (Node name func inputs oUnique) = do
         (sinks, sources) <- unzip <$> mapM (const createStream) inputs
         let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
-        pure (newMap, (func, sources, oUnique):l)
+        pure (newMap, (func, name, sources, oUnique):l)
   (outMap, funcs) <- foldM f (outputMap, []) nodes
 
   (retSink, Source retSource) <- createStream
@@ -712,13 +739,13 @@ runAlgo (Algorithm nodes retVar) st = do
   let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
   bracket
-    (mapM (customAsync . \(nt, inChans, retUnique :: Unique) ->
+    (mapM (customAsync . \(nt, name, inChans, retUnique :: Unique) ->
       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
           processor =
             case nt of
               CallSf sfRef              -> runFunc sfRef stateVar
               StreamProcessor processor -> processor
-      in mountStreamProcessor processor inChans outChans)
+      in mountStreamProcessor name processor inChans outChans)
       funcs)
     ( mapM_ cancel )
     $ \threads -> do
@@ -734,12 +761,12 @@ runAlgo (Algorithm nodes retVar) st = do
 
 printGraph :: Algorithm s r -> IO ()
 printGraph (Algorithm gr ret) = do
-  forM_ gr $ \(Node nt vars sfRet) ->
+  forM_ gr $ \(Node name nt vars sfRet) ->
     let ntStr = case nt of
                     CallSf _          -> "Sf"
                     StreamProcessor _ -> "StreamProcessor"
     in
-    putStrLn $ ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
+    putStrLn $ show name ++ " " ++  ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
   putStrLn $ "last return is " ++ show (uniqueToInt ret)
 
 
@@ -765,7 +792,7 @@ sf3 :: Var T -> Var Int -> ASTM s (Var Int)
 sf3 = call (liftSf (\T i -> sfm $ liftIO (putStrLn "Executing sf3") >> return (succ i))) stag
 
 aggregate :: Var Int -> ASTM Int (Var Int)
-aggregate = call (liftSf (\i -> sfm $ S.modify (+ i) >> S.get)) (lens id (const id))
+aggregate = call (liftSf (\i -> sfm $ liftIO (putStrLn $ "Executing aggregate " ++ show i) >> S.modify (+ i) >> S.get)) (lens id (const id))
 
 
 algorithm :: IO (Algorithm Int [Int])
