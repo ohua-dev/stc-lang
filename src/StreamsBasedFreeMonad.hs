@@ -1,5 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables        #-}
--- {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE DeriveGeneric              #-}
@@ -17,6 +15,7 @@
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE Rank2Types                 #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
@@ -29,9 +28,9 @@ module StreamsBasedFreeMonad where
 import           Control.Monad
 import           Control.Monad.Except
 -- import           Control.Monad.Par        as P
-import           Control.Arrow            (first)
+import           Control.Arrow            (first, (&&&), (***))
 import           Control.Monad.Reader
-import           Control.Monad.RWS        as RWS
+import           Control.Monad.RWS        as RWS hiding (Any)
 import           Control.Monad.State      as S
 --
 -- for debugging only:
@@ -45,14 +44,16 @@ import           Control.Monad.Free
 -- import           Control.Parallel         (pseq)
 import           Data.Default.Class
 import           Data.Dynamic2
+import           Data.Foldable            (fold)
 import           Data.IORef
 import           Data.Kind
-import           Data.List                (sortOn)
+import           Data.List                (find, sortOn)
 import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
 import           Data.Void
 import           Debug.Trace
+import           GHC.Prim                 (Any)
 import           Lens.Micro
 import           Lens.Micro.Mtl
 import qualified Ohua.ALang.Lang          as L
@@ -62,8 +63,11 @@ import qualified Ohua.DFGraph             as G
 import           Ohua.DFLang.Lang         (DFFnRef (..))
 import qualified Ohua.DFLang.Refs         as DFRefs
 import           Ohua.Monad
+import           Ohua.ParseTools.Refs     (ohuaLangNS)
 import           Ohua.Types
+import           Ohua.Unit
 import qualified Ohua.Util.Str            as Str
+import           Prelude                  hiding (Any)
 import           Unsafe.Coerce
 
 
@@ -98,10 +102,24 @@ intractList [] = error "Cannot convert empty list yet"
 intractList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
   where
     unwrap (Dynamic _ v) = v
-    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [Any]))) [tra]
+    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [()]))) [tra]
+
+destructureTuple :: Int -> Dynamic -> Dynamic
+destructureTuple i (Dynamic rep a) = Dynamic (types !! i) value
+  where
+    (tyCon, types) = splitTyConApp rep
+    mkEntry :: forall t . Typeable t => (t -> Int -> ()) -> (TyCon, ())
+    mkEntry f = (typeRepTyCon (typeRep (Proxy :: Proxy t)), f (unsafeCoerce a :: t) i)
+    value = unsafeCoerce $ fromMaybe (error "out of bounds") $ lookup tyCon
+      [ mkEntry $ \(a, b) -> \case 0 -> a; 1 -> b; _ -> error "out of bounds"
+      , mkEntry $ \(a, b, c) -> \case 0 -> a; 1 -> b; 3 -> c; _ -> error "out of bounds"
+      , mkEntry $ \(a, b, c, d) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; _ -> error "out of bounds"
+      , mkEntry $ \(a, b, c, d, e) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; 5 -> e; _ -> error "out of bounds"
+      ]
+
 
 united :: Lens' s ()
-united f s = (const s) <$> f ()
+united f s = const s <$> f ()
 
 -- The free monad
 
@@ -151,6 +169,13 @@ data ASTAction globalState a
          (Var inputType -> ASTM globalState (Var returnType))
          (Var [inputType])
          (Var [returnType] -> a)
+  | forall returnType
+    . Typeable returnType
+    => If
+         (Var Bool)
+         (ASTM globalState (Var returnType))
+         (ASTM globalState (Var returnType))
+         (Var returnType -> a)
 
 -- | The AST Monad
 newtype ASTM globalState a = ASTM (Free (ASTAction globalState) a)
@@ -234,6 +259,13 @@ smap :: (Typeable a, Typeable b)
      -> Var [a]
      -> ASTM globalState (Var [b])
 smap f lref = liftF $ Smap f lref id
+
+if_ :: Typeable a
+    => Var Bool
+    -> ASTM s (Var a)
+    -> ASTM s (Var a)
+    -> ASTM s (Var a)
+if_ b then_ else_ = liftF $ If b then_ else_ id
 
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t where
@@ -370,12 +402,28 @@ dfFnRefName :: DFFnRef -> QualifiedBinding
 dfFnRefName (EmbedSf n)    = n
 dfFnRefName (DFFunction n) = n
 
+d0, d1, d2, d3, d4 :: QualifiedBinding
+d0 = QualifiedBinding ohuaLangNS "fst"
+d1 = QualifiedBinding ohuaLangNS "snd"
+d2 = QualifiedBinding ohuaLangNS "trd"
+d3 = QualifiedBinding ohuaLangNS "frth"
+d4 = QualifiedBinding ohuaLangNS "fth"
+
+dN :: Int -> QualifiedBinding
+dN 0 = d0
+dN 1 = d1
+dN 2 = d2
+dN 3 = d3
+dN 4 = d4
+dN _ = error "out of bounds"
+
+captureSingleton :: QualifiedBinding
+captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
+
 
 defaultFunctionDict :: FunctionDict s
-defaultFunctionDict =
-  [ (dfFnRefName DFRefs.smapFun, StreamProcessor $ do
-        [size, v] <- recieveAllUntyped
-        mapM_ sendUntyped $ extractList v)
+defaultFunctionDict = Map.fromList $
+  [ (dfFnRefName DFRefs.smapFun, undefined)
   , (dfFnRefName DFRefs.collect, StreamProcessor $ do
         size <- recieve 1
         vs <- sequence $ replicate size $ recieveUntyped 0
@@ -396,60 +444,119 @@ defaultFunctionDict =
   , (dfFnRefName DFRefs.switch, StreamProcessor $ do
         b <- recieve 0
         sendUntyped =<< recieveUntyped (if b then 1 else 2))
-  , ("ohua.lang/fstBool", CallSf $ SfRef (liftSf $ sfm . pure . (fst :: (Bool, Bool) -> Bool)) united)
-  , ("ohua.lang/sndBool", CallSf $ SfRef (liftSf $ sfm . pure . (snd :: (Bool, Bool) -> Bool)) united)
-  ]
+  , (captureSingleton, StreamProcessor $ recieveUntyped 0 >>= sendUntyped)
+  , (dfFnRefName DFRefs.size, StreamProcessor $ do
+        coll <- recieveUntyped 0
+        send $ length (extractList coll))
+  ] ++ map (dN &&& destructOp) [0..4]
+  where
+    destructOp n = StreamProcessor $ recieveUntyped 0 >>= sendUntyped . destructureTuple n
 
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
 evaluateAST (ASTM m) = (dict, build e)
   where
+    evalInner :: ASTM s (Var a) -> EvalASTM s L.Expression
+    evalInner (ASTM inner) = do
+      (e, Mutator build) <- censor (const mempty) $ listen $ iterM go inner
+      build . L.Var . L.Local <$> varToBnd e
     (dict, build, e) = evalASTM $ do
       v <- iterM go m
-      L.Var . L.Local <$> varToBnd v
+      L.Apply (L.Var (L.Sf captureSingleton Nothing)) . L.Var . L.Local <$> varToBnd v
     go :: ASTAction s (EvalASTM s (Var a)) -> EvalASTM s (Var a)
     go (InvokeSf sf tag vars cont) = do
       n <- registerFunction (CallSf $ SfRef sf tag)
       (rv, rb) <- mkRegVar
       vars' <- mapM varToBnd vars
-      tellMut $ L.Let (Direct rb) (foldl L.Apply (L.Var (L.Sf n Nothing)) (map (L.Var . L.Local) vars'))
+      tellMut $ L.Let (Direct rb) (foldl L.Apply (L.Var (L.Sf n Nothing)) (if null vars' then [unitExpr] else map (L.Var . L.Local) vars'))
       cont rv
     go (Smap
          (innerCont :: Var inputType -> ASTM globalState (Var returnType))
          inputVar
          cont) = do
       (innerContVar, innerContBnd) <- mkRegVar
-      let ASTM inner = innerCont innerContVar
-      (e, Mutator build) <- censor (const mempty) $ listen $ iterM go inner
-      resBnd <- varToBnd e
+      e <- evalInner $ innerCont innerContVar
       inpBnd <- varToBnd inputVar
       (smapResVar, smapResBnd) <- mkRegVar
       tellMut $ L.Let (Direct smapResBnd) (L.Var (L.Sf ARefs.smap Nothing)
-                                           `L.Apply` L.Lambda (Direct innerContBnd) (build (L.Var (L.Local resBnd)))
+                                           `L.Apply` L.Lambda (Direct innerContBnd) e
                                            `L.Apply` L.Var (L.Local inpBnd)
                                           )
       cont smapResVar
-      where
-        iproxy = Proxy :: Proxy inputType
+    go (If v then_ else_ cont) = do
+      (rv, rb) <- mkRegVar
+      vbnd <- varToBnd v
+      thenE <- evalInner then_
+      elseE <- evalInner else_
+      tellMut $ L.Let (Direct rb) (L.Var (L.Sf ARefs.ifThenElse Nothing)
+                                  `L.Apply` L.Var (L.Local vbnd)
+                                  `L.Apply` L.Lambda "_" thenE
+                                  `L.Apply` L.Lambda "_" elseE
+                                  )
+      cont rv
 
-graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a -- yeah ... have to figure out where `a` comes from ... not sure yet how
-graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) undefined -- I dont know where i should find this var right now ...
+newtype GenIdM a = GenIdM { unwrapGenIdM :: S.State FnId a }
+  deriving (Applicative, Monad, Functor)
+
+instance MonadGenId GenIdM where
+  generateId = GenIdM $ modify succ >> get
+  resetIdCounter = undefined
+
+runGenIdM :: GenIdM a -> FnId -> a
+runGenIdM = evalState . unwrapGenIdM
+
+makeDestructuringExplicit :: G.OutGraph -> G.OutGraph
+makeDestructuringExplicit G.OutGraph{G.operators, G.arcs} = G.OutGraph (operators <> ops') arcs'
   where
-    buildOp G.Operator{..} = Node (dict ! operatorType) (argDict ! operatorId)
+    (ops', arcs') = fold $ runGenIdM (mapM go arcs) largestId
+    largestId = maximum (map G.operatorId operators)
+    go a@G.Arc{G.source, G.target} =
+      case source of
+        G.LocalSource t@G.Target{G.index=i}
+          | i == -1 -> pure (mempty, pure a)
+          | otherwise -> do
+              opid <- generateId
+              pure ( pure G.Operator{G.operatorId=opid, G.operatorType=dN i}
+                   , [ a { G.source = G.LocalSource G.Target{ G.operator = opid
+                                                            , G.index = -1
+                                                            }
+                         }
+                     , G.Arc { G.target = G.Target{ G.operator = opid
+                                                  , G.index = 0
+                                                  }
+                             , G.source = G.LocalSource t { G.index = -1 }
+                             }
+                     ]
+                   )
+        _ -> pure (mempty, pure a)
+
+
+graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a
+graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastArg
+  where
+    buildOp G.Operator{..} = Node (dict ! operatorType)
+                                  (fromMaybe [] $ Map.lookup operatorId argDict)
     opWRet = zip operators [Unique 0..]
     retDict = Map.fromList $ map (first G.operatorId) opWRet
+    lastArg = fromMaybe (error "no copture op") $ lookup captureSingleton $ map (first G.operatorType) opWRet
     -- The `sortOn` here is dangerous. it relies on there being *exactly one* input present for every
     -- argument to the function. If that invariant is broken we will not detect it here but get runtime errors
     argDict = fmap (map snd . sortOn fst) $ Map.fromListWith (++) $ map arcToUnique arcs
-    arcToUnique G.Arc{G.target=G.Target{G.operator}, source=src}
+    arcToUnique G.Arc{G.target=G.Target{G.operator, G.index=tindex}, source=src}
       = ( operator
         , case src of
-            G.LocalSource G.Target{..} -> pure (index, retDict ! operator)
-            _                          -> error "invariant broken"
+            G.LocalSource G.Target{..}
+              | index /= -1 -> error "invariant broken, destructuring not permitted yet"
+              | otherwise -> pure (tindex, retDict ! operator)
+            _ -> error "invariant broken, we dont have env args"
         )
 
 runCompiler :: L.Expression -> IO G.OutGraph
-runCompiler = fmap (either (error . Str.toString) id) . runExceptT . runStderrLoggingT . compile def def
+runCompiler
+  = fmap (either (error . Str.toString) makeDestructuringExplicit)
+  . runExceptT
+  . runStderrLoggingT
+  . compile def def { passAfterDFLowering = cleanUnits }
 
 -- The stream backend
 
@@ -475,17 +582,13 @@ newtype Sink a = Sink { unSink :: Packet a -> IO () }
 -- and a number of output streams to send to.
 -- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
 -- which stops the processing.
-newtype StreamM a = StreamM { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Source Dynamic], [Sink Dynamic]) IO) a }
-  deriving (Functor, Applicative, Monad, MonadIO)
+newtype StreamM a = StreamM
+  { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Source Dynamic], [Sink Dynamic]) IO) a
+  } deriving (Functor, Applicative, Monad, MonadIO)
 
 -- | Create a stream with a end that can only be sent to and one that can only be read from.
 createStream :: IO (Sink a, Source a)
-createStream = do
-  chan <- newChan
-  pure
-    ( Sink $ writeChan chan
-    , Source $ readChan chan
-    )
+createStream = (Sink . writeChan &&& Source . readChan) <$> newChan
 
 -- | Send a packet to all output streams
 sendPacket :: Packet Dynamic -> StreamM ()
@@ -588,7 +691,9 @@ mountStreamProcessor process inputs outputs = do
 
 
 customAsync :: IO a -> IO (Async a)
-customAsync = async
+customAsync thing = async $ thing `catch` \e -> do
+  putStrLn (displayException (e :: SomeException))
+  throwIO e
 
 
 runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
@@ -642,9 +747,6 @@ printGraph (Algorithm gr ret) = do
 
 
 data T = T
-data A = A
-data B = B deriving Show
-data C = C
 
 
 -- Stateful functions for the example
