@@ -36,7 +36,10 @@ resolver: lts-9.13
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - .
-- ../core
+- location:
+    git: git@github.com:ohua-dev/ohua-core
+    commit: 8b982a27f335e480982c0f47f966962ee8bf7bb9
+  extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps: []
