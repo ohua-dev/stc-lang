@@ -4,3 +4,4 @@
 *.hi
 .stack-work/
 *.dump-simpl
+ohua-core
