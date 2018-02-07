@@ -51,6 +51,7 @@ import           Data.List                (find, sortOn)
 import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
+import           Data.Tuple.OneTuple
 import           Data.Void
 import           Debug.Trace
 import           Lens.Micro
@@ -109,11 +110,26 @@ destructureTuple i (Dynamic rep a) = Dynamic (types !! i) value
     mkEntry :: forall t . Typeable t => (t -> Int -> ()) -> (TyCon, ())
     mkEntry f = (typeRepTyCon (typeRep (Proxy :: Proxy t)), f (unsafeCoerce a :: t) i)
     value = unsafeCoerce $ fromMaybe (error "out of bounds") $ lookup tyCon
-      [ mkEntry $ \(a, b) -> \case 0 -> a; 1 -> b; _ -> error "out of bounds"
+      [ mkEntry $ \(OneTuple a) -> \case 0 -> a; _ -> error "out of bounds"
+      , mkEntry $ \(a, b) -> \case 0 -> a; 1 -> b; _ -> error "out of bounds"
       , mkEntry $ \(a, b, c) -> \case 0 -> a; 1 -> b; 3 -> c; _ -> error "out of bounds"
       , mkEntry $ \(a, b, c, d) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; _ -> error "out of bounds"
       , mkEntry $ \(a, b, c, d, e) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; 5 -> e; _ -> error "out of bounds"
       ]
+
+
+lToTup :: [Dynamic] -> Dynamic
+lToTup [] = error "cannot convert empty list"
+lToTup l = Dynamic (mkTyConApp tycon types) d
+  where
+    (types, items) = unzip $ map (\(Dynamic ty d) -> (ty, d)) l
+    mkEntry (a :: t) = (typeRepTyCon (typeRep (Proxy :: Proxy t)), unsafeCoerce a)
+    (tycon, d) = case map unsafeCoerce items of
+          [a] -> mkEntry $ OneTuple (a :: ())
+          [a, b] -> mkEntry (a, b)
+          [a, b, c] -> mkEntry (a, b, c)
+          [a, b, c, d] -> mkEntry (a, b, c, d)
+          _ -> error "wrapping not supported for this many arguments yet"
 
 
 united :: Lens' s ()
@@ -449,10 +465,9 @@ defaultFunctionDict = Map.fromList $
           v <- recieveUntyped 1
           sequence_ $ replicate size $ sendUntyped v)
     , (DFRefs.scope, StreamProcessor $ pure $ do
-          b <- recieve 0
-          val <- recieveUntyped 1
-          if b
-            then sendUntyped val
+          (b:vals) <- recieveAllUntyped
+          if forceDynamic b
+            then sendUntyped $ lToTup vals
             else pure ())
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
@@ -463,6 +478,7 @@ defaultFunctionDict = Map.fromList $
     , (DFRefs.size, StreamProcessor $ pure $ do
           coll <- recieveUntyped 0
           send $ length (extractList coll))
+    , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= sendUntyped)
     ]
   ++ map (dN &&& destructOp) [0..4]
   where
@@ -522,7 +538,7 @@ runGenIdM :: GenIdM a -> FnId -> a
 runGenIdM = evalState . unwrapGenIdM
 
 makeDestructuringExplicit :: G.OutGraph -> G.OutGraph
-makeDestructuringExplicit G.OutGraph{G.operators, G.arcs} = G.OutGraph (operators <> ops') arcs'
+makeDestructuringExplicit G.OutGraph{G.operators, G.arcs, G.returnArc} = G.OutGraph (operators <> ops') arcs' returnArc
   where
     (ops', arcs') = fold $ runGenIdM (mapM go arcs) largestId
     largestId = maximum (map G.operatorId operators)
@@ -551,7 +567,7 @@ graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a
 graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastArg
   where
     buildOp G.Operator{..} = Node operatorType
-                                  (dict ! operatorType)
+                                  (fromMaybe (error $ "cannot find " ++ show operatorType) $ Map.lookup operatorType dict)
                                   (fromMaybe [] $ Map.lookup operatorId argDict)
     opWRet = zip operators [Unique 0..]
     retDict = Map.fromList $ map (first G.operatorId) opWRet
@@ -780,7 +796,7 @@ data T = T
 
 
 stag :: Accessor s ()
-stag = lens (const ()) const
+stag = united
 
 sf1 :: ASTM s (Var T)
 sf1 = call (liftSf (sfm $ liftIO (putStrLn "Executing sf1") >> pure T)) stag
@@ -795,9 +811,21 @@ aggregate :: Var Int -> ASTM Int (Var Int)
 aggregate = call (liftSf (\i -> sfm $ liftIO (putStrLn $ "Executing aggregate " ++ show i) >> S.modify (+ i) >> S.get)) (lens id (const id))
 
 
+plus :: Var Int -> Var Int -> ASTM s (Var Int)
+plus = call (liftSf (\a b -> sfm $ pure $ a + b)) stag
+
+sfConst :: Typeable a => a -> ASTM s (Var a)
+sfConst a = call (liftSf (sfm $ pure a)) stag
+
+gt :: (Typeable a, Ord a) => Var a -> Var a -> ASTM s (Var Bool)
+gt = call (liftSf (\a b -> sfm $ pure $ a > b)) stag
+
 algorithm :: IO (Algorithm Int [Int])
 algorithm = createAlgo $ do
   var1 <- sf1
   var3 <- sf2 var1
-  v <- smap aggregate var3
+  var2 <- sfConst 3
+  v <- smap (\v -> aggregate =<< do
+                 isGreater <- (gt v var2)
+                 if_ isGreater (pure v) (plus v var2)) var3
   pure v
