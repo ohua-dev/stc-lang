@@ -9,13 +9,13 @@ import Control.Monad
 
 import FuturesBasedMonad
 
-foo :: Int -> State Int Int
+foo :: Int -> StateT Int IO Int
 foo x = do
   s <- get
   put $ s+2
   return $ x+2
 
-bar :: Int -> State Int Int
+bar :: Int -> StateT Int IO Int
 bar x = do
   s <- get
   put $ s+3
@@ -49,31 +49,31 @@ smapResultUsed v = do
 
 returnTest :: Assertion
 returnTest = do
-  let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
+  (result,state) <- runOhuaM (return (10::Int)) ([]::[Int])
   assertEqual "result was wrong." (10::Int) result
   assertEqual "state was wrong." ([]::[Int]) state
 
 bindTest :: Assertion
 bindTest = do
-  let (result,state) = runOhuaM (simpleComposition 10) [0,0]
+  (result,state) <- runOhuaM (simpleComposition 10) [0,0]
   assertEqual "result was wrong." 36 result
   assertEqual "state was wrong." [2,3] state
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
-  let (result,state) = runOhuaM (simpleSMap [10,10]) [0,0]
+  (result,state) <- runOhuaM (simpleSMap [10,10]) [0,0]
   assertEqual "result was wrong." [36,36] result
   assertEqual "state was wrong." [4,6] state
 
 smapContextTest :: Assertion
 smapContextTest = do
-  let (result,state) = runOhuaM (smapWithContext 10) [0,0,0,0]
+  (result,state) <- runOhuaM (smapWithContext 10) [0,0,0,0]
   assertEqual "result was wrong." [42,114] result
   assertEqual "state was wrong." [4,6,2,3] state
 
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
-  let (result,state) = runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
+  (result,state) <- runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
   assertEqual "result was wrong." (44,342) result
   assertEqual "state was wrong." [4,6,2,3,2,3] state
 

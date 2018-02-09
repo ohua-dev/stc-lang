@@ -59,9 +59,9 @@ executable statefulness-exe
 test-suite statefulness-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
-  -- main-is:             CorrectnessFuturesBasedMonad.hs
+  main-is:             CorrectnessFuturesBasedMonad.hs
   -- main-is:             ParallelismFuturesBasedMonad.hs
-  main-is:             CorrectnessStreamsBasedMonad.hs
+  -- main-is:             CorrectnessStreamsBasedMonad.hs
   build-depends:       base
                      , statefulness
                      , mtl

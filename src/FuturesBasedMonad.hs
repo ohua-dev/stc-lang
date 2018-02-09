@@ -27,14 +27,15 @@ import           Data.Set               as Set hiding (map)
 import           GHC.Generics                   (Generic)
 -- import           System.IO.Unsafe
 
-type SFM s b = State s b
--- type SFM s b = StateT s IO b
+-- type SFM s b = State s b
+type SFM s b = StateT s IO b
 
 type SF s a b = a -> SFM s b
 
-runSF :: SFM s b -> s -> (b,s)
-runSF = runState
--- runSF = runStateT
+-- runSF :: SFM s b -> s -> (b,s)
+-- runSF = runState
+runSF :: SFM s b -> s -> IO (b,s)
+runSF = runStateT
 
 newtype OhuaM m s a = OhuaM { runOhua :: s -> m ( a -- the result
                                                  , s -- the global state
@@ -123,47 +124,25 @@ instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
           (result1, gs'') <- runOhua (g result0) gs'
           return (result1, gs'')
 
+instance (NFData s, ParIVar ivar m, MonadIO m) => MonadIO (OhuaM m s) where
+  liftIO :: IO a -> OhuaM m s a
+  liftIO ioAction = OhuaM $ \s -> (,s) <$> liftIO ioAction
+
 liftPar :: (ParIVar ivar m) => m a -> OhuaM m (GlobalState ivar s) a
 liftPar p = OhuaM $ \s -> (,s) <$> p
--- liftPar p = OhuaM f -- $ \s -> (,s) <$> p
---   where
---     f :: s -> m (a, GlobalState s)
---     f s = (,s) <$> p
 
-
--- liftWithIndex :: (NFData s) => Int -> SF s a b -> a -> OhuaM (GlobalState s) b
--- liftWithIndex i f d = do
-
--- {-# NOINLINE liftWithIndex #-}
--- liftWithIndex :: forall s a b.(NFData s, Show a) => String -> Int -> SF s a b -> a -> OhuaM (GlobalState s) b
--- liftWithIndex name i f d = do
---   -- we define the proper order on the private state right here!
---   (GlobalState gsIn gsOut touchedState) <- (logOhuaM $ "running -> " ++ name ++ " -> " ++ show d) >> oget
---   let (_,ithIn:_) = splitAt i gsIn
---   let (_,ithOut:_) = splitAt i gsOut
---   -- traceM $ "waiting on lock ... ->" ++ name
---   ithIn' <- (logOhuaM $ "waiting on lock ... ->" ++ name ++ " -> " ++ show d) >> return ithIn
---   localState <- liftPar $ getState ithIn' -- this synchronizes access to the local state
---   -- traceM $ "lock released! -> " ++ name
---   localState'' <- (oPrint $ "lock acquired! -> " ++ name ++ " -> " ++ show d) `pseq` return localState
---   (d', localState') <- return $ runSF (f d) localState''
---   c <- (d', localState') `pseq` return $ oPrint $ "done with computation -> " ++ name ++ " -> " ++ show d
---   -- (d'',ls') <- (oPrint $ "done with computation -> " ++ name ++ " -> " ++ show d) `pseq` return (d',localState')
---   y <- c `pseq` liftPar $ release ithOut localState' touchedState gsIn gsOut d name
---   x <- y `pseq` (return d')
---   -- let x' = ohuaPrint x $ "after -> " ++ name ++ " -> " ++ show d
---   (ohuaPrint x $ "after -> " ++ name ++ " -> " ++ show d) `pseq` oput $ (GlobalState gsIn gsOut) $ Set.insert i touchedState
---   return x
-
+-- version with more input used for debugging:
+-- liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => String -> Int -> SF s a b -> Int -> a -> OhuaM m (GlobalState ivar s) b
+-- liftWithIndex _ i f _ d = do
 {-# NOINLINE liftWithIndex #-}
-liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => String -> Int -> SF s a b -> Int -> a -> OhuaM m (GlobalState ivar s) b
-liftWithIndex _ i f _ d = do
+liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
+liftWithIndex i f d = do
   -- we define the proper order on the private state right here!
   GlobalState gsIn gsOut touchedState <- oget
   let ithIn = gsIn !! i
       ithOut = gsOut !! i
   localState <- liftPar $ getState ithIn -- this synchronizes access to the local state
-  let (d', localState') = runSF (f d) localState
+  (d', localState') <- liftIO $ runSF (f d) localState
   liftPar $ release ithOut localState'
   oput $ GlobalState gsIn gsOut $ Set.insert i touchedState
   return d'
@@ -194,8 +173,10 @@ runOhuaM comp initialState = PIO.runParIO $ do
 
 -- this spawns the computations for the elements but integrates the
 -- state dependencies!
+-- version used for debugging:
+-- smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (Int -> a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
 {-# NOINLINE smap #-}
-smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (Int -> a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
+smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
 smap algo xs = do
   (GlobalState gsIn gsOut touched) <- oget -- get me the initial state
   futures <- liftPar $ smap' algo xs [0..] gsIn touched
@@ -209,7 +190,8 @@ smap algo xs = do
   return result
   where
     smap' :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) =>
-                        (Int -> a -> OhuaM m (GlobalState ivar s) b) ->
+                        (a -> OhuaM m (GlobalState ivar s) b) ->
+                        -- debugging: (Int -> a -> OhuaM m (GlobalState ivar s) b) ->
                         [a] ->
                         [Int] ->
                         [ivar s] ->
@@ -217,7 +199,8 @@ smap algo xs = do
                         m [ivar (b, GlobalState ivar s)]
     smap' f (y:ys) (ident:idents) prevState touched = do
       outS <- forM prevState $ const PC.new -- create the new output state
-      result <- PC.spawn $ runOhua (f ident y) $ GlobalState prevState outS Set.empty
+      -- debugging: result <- PC.spawn $ runOhua (f ident y) $ GlobalState prevState outS Set.empty
+      result <- PC.spawn $ runOhua (f y) $ GlobalState prevState outS Set.empty
       -- traceM $ "spawned smap computation: " ++ show ident
       rest <- smap' f ys idents outS touched
       return $ result : rest
