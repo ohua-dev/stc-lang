@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE DeriveGeneric              #-}
@@ -13,6 +14,7 @@
 {-# LANGUAGE NamedFieldPuns             #-}
 {-# LANGUAGE OverloadedLists            #-}
 {-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE PatternSynonyms            #-}
 {-# LANGUAGE Rank2Types                 #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
@@ -20,8 +22,6 @@
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
-
-
 module StreamsBasedFreeMonad where
 
 
@@ -52,6 +52,7 @@ import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
 import           Data.Tuple.OneTuple
+import           Data.Typeable
 import           Data.Void
 import           Debug.Trace
 import           Lens.Micro
@@ -69,7 +70,17 @@ import           Ohua.Unit
 import qualified Ohua.Util.Str            as Str
 import           Unsafe.Coerce
 
+#if __GLASGOW_HASKELL__ >= 802
+import qualified Type.Reflection          as Refl
+import qualified Type.Reflection.Unsafe   as Refl
+#endif
 
+
+
+#if __GLASGOW_HASKELL__ >= 802
+mkTyConApp :: TyCon -> [TypeRep] -> TypeRep
+mkTyConApp con args = Refl.SomeTypeRep $ Refl.mkTrCon con args
+#endif
 -- Utils
 
 
