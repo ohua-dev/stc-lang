@@ -450,7 +450,7 @@ captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
 
 defaultFunctionDict :: FunctionDict s
 defaultFunctionDict = Map.fromList $
-  (captureSingleton, StreamProcessor $ pure $ recieveUntyped 0 >>= \v -> liftIO (putStrLn "recieved a final value") >> sendUntyped v)
+  (captureSingleton, StreamProcessor $ pure $ recieveUntyped 0 >>= \v -> sendUntyped v)
   : map (first dfFnRefName)
     [ (DFRefs.smapFun, StreamProcessor $ do
           stateVar <- liftIO $ newIORef []
@@ -466,10 +466,8 @@ defaultFunctionDict = Map.fromList $
       )
     , (DFRefs.collect, StreamProcessor $ pure $ do
           size <- recieve 0
-          liftIO $ putStrLn "Recieved a size"
           sequence $ replicate (pred size) $ recieveUntyped 0
           vs <- sequence $ replicate size $ recieveUntyped 1
-          liftIO $ putStrLn "Collecting done"
           sendUntyped $ injectList vs)
     , (DFRefs.oneToN, StreamProcessor $ pure $ do
           size <- recieve 0
@@ -600,6 +598,7 @@ runCompiler
   = fmap (either (error . Str.toString) makeDestructuringExplicit)
   . runExceptT
   . runStderrLoggingT
+  . filterLogger (const $ (>= LevelError))
   . compile def def { passAfterDFLowering = cleanUnits }
 
 -- The stream backend
@@ -733,7 +732,7 @@ mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] ->
 mountStreamProcessor name process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
-    Left Nothing  -> putStrLn $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
+    Left Nothing  -> pure () --putStrLn $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
     Left (Just _) -> putStrLn $ show name ++ " finished with leftover packets" --error "There were packets left over when a processor exited"
     Right ()      -> error "impossible"
   where
