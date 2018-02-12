@@ -1,3 +1,6 @@
+
+module CorrectnessFuturesBasedMonad where
+
 import Control.Monad.State
 
 import Test.HUnit hiding (State)
@@ -47,42 +50,55 @@ smapResultUsed v = do
   return (r3,r4)
 
 
+simpleCompositionPackaged v = do
+  c <- return v
+  r0 <- liftWithIndex' 0 $ foo c
+  r1 <- liftWithIndex' 1 $ bar r0
+  return r1
+
+
 returnTest :: Assertion
 returnTest = do
-  (result,state) <- runOhuaM (return (10::Int)) ([]::[Int])
+  (result,s) <- runOhuaM (return (10::Int)) ([]::[Int])
   assertEqual "result was wrong." (10::Int) result
-  assertEqual "state was wrong." ([]::[Int]) state
+  assertEqual "state was wrong." ([]::[Int]) s
 
 bindTest :: Assertion
 bindTest = do
-  (result,state) <- runOhuaM (simpleComposition 10) [0,0]
+  (result,s) <- runOhuaM (simpleComposition 10) [0,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] state
+  assertEqual "state was wrong." [2,3] s
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
-  (result,state) <- runOhuaM (simpleSMap [10,10]) [0,0]
+  (result,s) <- runOhuaM (simpleSMap [10,10]) [0,0]
   assertEqual "result was wrong." [36,36] result
-  assertEqual "state was wrong." [4,6] state
+  assertEqual "state was wrong." [4,6] s
 
 smapContextTest :: Assertion
 smapContextTest = do
-  (result,state) <- runOhuaM (smapWithContext 10) [0,0,0,0]
+  (result,s) <- runOhuaM (smapWithContext 10) [0,0,0,0]
   assertEqual "result was wrong." [42,114] result
-  assertEqual "state was wrong." [4,6,2,3] state
+  assertEqual "state was wrong." [4,6,2,3] s
 
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
-  (result,state) <- runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
+  (result,s) <- runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
   assertEqual "result was wrong." (44,342) result
-  assertEqual "state was wrong." [4,6,2,3,2,3] state
+  assertEqual "state was wrong." [4,6,2,3,2,3] s
 
+packagedBindTest :: Assertion
+packagedBindTest = do
+  (result,s) <- runOhuaM (simpleCompositionPackaged 10) [0,0]
+  assertEqual "result was wrong." 36 result
+  assertEqual "state was wrong." [2,3] s
 
-main :: IO ()
-main = defaultMainWithOpts
-       [testCase "checking monadic return" returnTest
-       ,testCase "checking monadic bind" bindTest
-       ,testCase "checking simple pipe smap" pipeSMapTest
-       ,testCase "checking smap with context" smapContextTest
-       ,testCase "checking smap result used" smapResultUsedTest]
-       mempty
+testSuite :: [Test.Framework.Test]
+testSuite = [
+              testCase "Futures: checking monadic return" returnTest
+            , testCase "Futures: checking monadic bind" bindTest
+            , testCase "Futures: checking simple pipe smap" pipeSMapTest
+            , testCase "Futures: checking smap with context" smapContextTest
+            , testCase "Futures: checking smap result used" smapResultUsedTest
+            , testCase "Futures: checking packegd version" packagedBindTest
+            ]

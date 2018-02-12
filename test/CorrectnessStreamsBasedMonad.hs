@@ -1,92 +1,104 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-import Control.Monad.State
+module CorrectnessStreamsBasedMonad where
 
 import Test.HUnit hiding (State)
 import Test.Framework
 import Test.Framework.Providers.HUnit
--- import Data.Monoid
-import Control.Monad
--- import Utils
 
 import StreamsBasedFreeMonad
+import StreamsBasedExplicitAPI
 
-foo :: Int -> State Int Int
+import Control.Monad.State
+
+foo :: Int -> SfMonad Int Int
 foo x = do
   s <- get
   put $ s+2
   return $ x+2
 
-bar :: Int -> State Int Int
+bar :: Int -> SfMonad Int Int
 bar x = do
   s <- get
   put $ s+3
   return $ x*3
 
-simpleComposition ident v = do
+cons_ :: Int -> Int -> SfMonad Int [Int]
+cons_ x y = return [x,y]
+
+at_ :: [Int] -> Int -> SfMonad Int Int
+at_ xs ith = return $ xs !! ith
+
+simpleComposition v = do
   c <- return v
-  r0 <- liftWithIndex "foo" 0 foo ident c
-  r1 <- liftWithIndex "bar" 1 bar ident r0
-  r2 <- liftWithIndex "foobar" 2 bar ident r1
+  r0 <- liftWithIndex 0 foo c
+  r1 <- liftWithIndex 1 bar r0
+  return r1
+
+simpleSMap = smap simpleComposition
+
+smapWithContext v = do
+  c <- return v
+  r0 <- liftWithIndex 2 foo c
+  r1 <- liftWithIndex 3 bar r0
+  r01 <- lift3WithIndex 4 cons_ r0 r1
+  r2 <- smap simpleComposition r01
   return r2
 
--- simpleSMap v = smap simpleComposition v
---
--- smapWithContext v = do
---   c <- return v
---   r0 <- liftWithIndex 2 foo c
---   r1 <- liftWithIndex 3 bar r0
---   r2 <- smap simpleComposition [r0,r1]
---   return r2
---
--- smapResultUsed v = do
---   c <- return v
---   r0 <- liftWithIndex 2 foo c
---   r1 <- liftWithIndex 3 bar r0
---   r2 <- smap simpleComposition [r0,r1]
---   r3 <- liftWithIndex 4 foo $ r2 !! 0
---   r4 <- liftWithIndex 5 bar $ r2 !! 1
---   return (r3,r4)
+smapResultUsed v = do
+  c <- return v
+  r0 <- liftWithIndex 2 foo c
+  r1 <- liftWithIndex 3 bar r0
+  r01 <- lift3WithIndex 4 cons_ r0 r1
+  r2 <- smap simpleComposition r01
+  r20 <- lift3WithIndex 5 at_ r2 =<< sfConst' 0
+  r21 <- lift3WithIndex 6 at_ r2 =<< sfConst' 1
+  r3 <- liftWithIndex 7 foo r20
+  r4 <- liftWithIndex 8 bar r21
+  lift3WithIndex 9 cons_ r3 r4
 
 
 -- returnTest :: Assertion
 -- returnTest = do
---   let (result,state) = runOhuaM (return (10::Int)) ([]::[Int])
+--   -- FIXME API not correct!
+--   -- (result,s) <- runAlgo (return (10::Int)) ([]::[Int])
+--   result <- runOhuaM (return (10::Int)) ([]::[Int])
 --   assertEqual "result was wrong." (10::Int) result
---   assertEqual "state was wrong." ([]::[Int]) state
+--   -- assertEqual "state was wrong." ([]::[Int]) s
 
 bindTest :: Assertion
 bindTest = do
-  let (result,state) = runOhuaM (simpleComposition 333 10) [0,0]
+  -- FIXME API not correct!
+  result <- runOhuaM (simpleComposition =<< sfConst' 10) [0,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] state
+  -- assertEqual "state was wrong." [2,3] s
 
--- pipeSMapTest :: Assertion
--- pipeSMapTest = do
---   let (result,state) = runOhuaM (simpleSMap [10,10]) [0,0]
---   assertEqual "result was wrong." [36,36] result
---   assertEqual "state was wrong." [4,6] state
+pipeSMapTest :: Assertion
+pipeSMapTest = do
+  -- FIXME API not correct!
+  result <- runOhuaM (simpleSMap =<< sfConst' [10,10]) [0,0,0]
+  assertEqual "result was wrong." [36,36] result
+  -- assertEqual "state was wrong." [4,6] s
 
--- smapContextTest :: Assertion
--- smapContextTest = do
---   let (result,state) = runOhuaM (smapWithContext 10) [0,0,0,0]
---   assertEqual "result was wrong." [42,114] result
---   assertEqual "state was wrong." [4,6,2,3] state
---
--- smapResultUsedTest :: Assertion
--- smapResultUsedTest = do
---   let (result,state) = runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
---   assertEqual "result was wrong." (44,342) result
---   assertEqual "state was wrong." [4,6,2,3,2,3] state
+smapContextTest :: Assertion
+smapContextTest = do
+  -- FIXME API not correct!
+  result <- runOhuaM (smapWithContext =<< sfConst' 10) [0,0,0,0,0]
+  assertEqual "result was wrong." [42,114] result
+  -- assertEqual "state was wrong." [4,6,2,3] s
 
+smapResultUsedTest :: Assertion
+smapResultUsedTest = do
+  -- FIXME API not correct!
+  result <- runOhuaM (smapResultUsed =<< sfConst' 10) [0,0,0,0,0,0,0,0,0]
+  assertEqual "result was wrong." [44,342] result
+  -- assertEqual "state was wrong." [4,6,2,3,2,3] s
 
-main :: IO ()
-main = defaultMainWithOpts
-       [
-         -- testCase "checking monadic return" returnTest
-        testCase "checking monadic bind" bindTest
-       -- , testCase "checking simple pipe smap" pipeSMapTest
-       -- , testCase "checking smap with context" smapContextTest
-       -- , testCase "checking smap result used" smapResultUsedTest
-       ]
-       mempty
+testSuite :: [Test.Framework.Test]
+testSuite = [
+              -- testCase "Streams: checking monadic return" returnTest
+              testCase "Streams: checking monadic bind" bindTest
+            , testCase "Streams: checking simple pipe smap" pipeSMapTest
+            , testCase "Streams: checking smap with context" smapContextTest
+            , testCase "Streams: checking smap result used" smapResultUsedTest
+            ]

@@ -17,7 +17,7 @@ library
   hs-source-dirs:      src
   -- exposed-modules:     FuturesBasedMonad
   -- exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, Scheduler, SchedulerInternal
-  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedFreeMonad
+  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedFreeMonad, StreamsBasedExplicitAPI
   other-modules: Data.Dynamic2
   build-depends:       base >= 4.7 && < 5,
                        mtl >= 2.2.1,
@@ -59,9 +59,9 @@ executable statefulness-exe
 test-suite statefulness-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
-  main-is:             CorrectnessFuturesBasedMonad.hs
-  -- main-is:             ParallelismFuturesBasedMonad.hs
-  -- main-is:             CorrectnessStreamsBasedMonad.hs
+  main-is:             Spec.hs
+  other-modules:       CorrectnessFuturesBasedMonad
+                     , CorrectnessStreamsBasedMonad  
   build-depends:       base
                      , statefulness
                      , mtl

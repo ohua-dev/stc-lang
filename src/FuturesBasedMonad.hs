@@ -136,16 +136,20 @@ liftPar p = OhuaM $ \s -> (,s) <$> p
 -- liftWithIndex _ i f _ d = do
 {-# NOINLINE liftWithIndex #-}
 liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
-liftWithIndex i f d = do
+liftWithIndex i f d = liftWithIndex' i $ f d
+
+liftWithIndex' :: (NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
+liftWithIndex' i comp = do
   -- we define the proper order on the private state right here!
   GlobalState gsIn gsOut touchedState <- oget
   let ithIn = gsIn !! i
       ithOut = gsOut !! i
   localState <- liftPar $ getState ithIn -- this synchronizes access to the local state
-  (d', localState') <- liftIO $ runSF (f d) localState
+  (d', localState') <- liftIO $ runSF comp localState
   liftPar $ release ithOut localState'
   oput $ GlobalState gsIn gsOut $ Set.insert i touchedState
   return d'
+
 
 {-# NOINLINE release #-}
 release :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()

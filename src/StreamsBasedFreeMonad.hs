@@ -800,7 +800,7 @@ printGraph (Algorithm gr ret) = do
 -- Types for the example
 
 
-data T = T
+data T = T deriving (Show)
 
 
 -- Stateful functions for the example
