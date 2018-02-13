@@ -19,9 +19,9 @@ library
   -- exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, Scheduler, SchedulerInternal
   exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedFreeMonad, StreamsBasedExplicitAPI
   other-modules: Data.Dynamic2
-  build-depends:       base >= 4.7 && < 5,
-                       mtl >= 2.2.1,
-                       monad-par >= 0.3.4,
+  build-depends:       base,
+                       mtl,
+                       monad-par,
                        deepseq,
                        containers,
                        parallel,
@@ -61,7 +61,7 @@ test-suite statefulness-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   other-modules:       CorrectnessFuturesBasedMonad
-                     , CorrectnessStreamsBasedMonad  
+                     , CorrectnessStreamsBasedMonad
   build-depends:       base
                      , statefulness
                      , mtl
