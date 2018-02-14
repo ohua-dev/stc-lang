@@ -8,7 +8,13 @@
 --- this implementation does not rely on channels. it builds on futures!
 
 
-module FuturesBasedMonad where
+module FuturesBasedMonad ( smap
+                         , liftWithIndex
+                         , liftWithIndex'
+                         , SF
+                         , SFM
+                         , runOhuaM
+                         ) where
 
 import           Control.Monad
 -- import           Control.Monad.Par       as P
@@ -37,25 +43,13 @@ type SF s a b = a -> SFM s b
 runSF :: SFM s b -> s -> IO (b,s)
 runSF = runStateT
 
-newtype OhuaM m s a = OhuaM { runOhua :: s -> m ( a -- the result
-                                                 , s -- the global state
-                                                 )}
+data OhuaM m globalState result = OhuaM {
+                              moveStateForward :: globalState -> m globalState,
+                              runOhua :: globalState -> m (result, globalState)
+                             }
 
 data GlobalState ivar s = GlobalState [ivar s] [ivar s] (Set.Set Int) deriving (Generic)
 instance (NFData s, NFData (ivar s)) => NFData (GlobalState ivar s)
-
--- logOhuaM :: String -> OhuaM s ()
--- logOhuaM msg = OhuaM $ \s -> unsafePerformIO (putStrLn msg) `seq` return ((), s)
-
-
--- {-# NOINLINE ohuaPrint #-}
--- ohuaPrint :: Show a => b -> a -> b
--- ohuaPrint c msg =
---   unsafePerformIO $ print msg >> return c
---
--- {-# NOINLINE oPrint #-}
--- oPrint :: Show a => a -> ()
--- oPrint msg = unsafePerformIO $ print msg
 
 --
 -- shortcoming: this monad implementation is strict because bind requests the
@@ -72,7 +66,7 @@ instance (NFData s, NFData (ivar s)) => NFData (GlobalState ivar s)
 --                (x1,x2,x3) <- (,,) <$> a 5 <*> a 5 <*> a 5
 --
 instance (Functor m) => Functor (OhuaM m s) where
-  fmap f (OhuaM g) = OhuaM $ \s -> first f <$> g s
+  fmap f g = OhuaM (moveStateForward g) $ fmap (first f) . runOhua g
 
 instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
   pure = return
@@ -81,9 +75,16 @@ instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
   -- in order to do so we need to provide a OhuaM computation in the new applicative functor that
   -- can be ready executed via runOhua! - (Haxl doesn't care)
   (<*>) :: forall a b.OhuaM m s (a -> b) -> OhuaM m s a -> OhuaM m s b
-  f <*> a = OhuaM comp
+  f <*> a = OhuaM moveState comp
     where
-      comp :: () => s -> m (b,s)
+      moveState :: s -> m s
+      moveState gs = do
+        -- there is really no computation here, so no need to spawn anything
+        gs1 <- moveStateForward a gs
+        gs2 <- moveStateForward f gs
+        -- FIXME this is not correct yet!
+        return gs1
+      comp :: s -> m (b,s)
       comp gs = do
         -- run the action first. in the final monad code for OhuaM, the outermost <*>
         -- will execute first. as a result of this code, we will recursively go and
@@ -109,12 +110,14 @@ instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
 instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
   {-# NOINLINE return #-}
   return :: forall a.a -> OhuaM m s a
-  return v = OhuaM $ \s -> return (v, s)
+  return v = OhuaM return $ \s -> return (v, s)
 
   {-# NOINLINE (>>=) #-}
   (>>=) :: forall a b.OhuaM m s a -> (a -> OhuaM m s b) -> OhuaM m s b
-  f >>= g = OhuaM comp
+  f >>= g = OhuaM moveState comp
       where
+        moveState = undefined -- TODO
+
         comp :: s -> m (b, s)
         comp gs = do
           -- there is no need to spawn here!
@@ -126,10 +129,10 @@ instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
 
 instance (NFData s, ParIVar ivar m, MonadIO m) => MonadIO (OhuaM m s) where
   liftIO :: IO a -> OhuaM m s a
-  liftIO ioAction = OhuaM $ \s -> (,s) <$> liftIO ioAction
+  liftIO ioAction = OhuaM return $ \s -> (,s) <$> liftIO ioAction
 
 liftPar :: (ParIVar ivar m) => m a -> OhuaM m (GlobalState ivar s) a
-liftPar p = OhuaM $ \s -> (,s) <$> p
+liftPar p = OhuaM return $ \s -> (,s) <$> p
 
 -- version with more input used for debugging:
 -- liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => String -> Int -> SF s a b -> Int -> a -> OhuaM m (GlobalState ivar s) b
@@ -138,17 +141,20 @@ liftPar p = OhuaM $ \s -> (,s) <$> p
 liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
 liftWithIndex i f d = liftWithIndex' i $ f d
 
-liftWithIndex' :: (NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
-liftWithIndex' i comp = do
-  -- we define the proper order on the private state right here!
-  GlobalState gsIn gsOut touchedState <- oget
-  let ithIn = gsIn !! i
-      ithOut = gsOut !! i
-  localState <- liftPar $ getState ithIn -- this synchronizes access to the local state
-  (d', localState') <- liftIO $ runSF comp localState
-  liftPar $ release ithOut localState'
-  oput $ GlobalState gsIn gsOut $ Set.insert i touchedState
-  return d'
+liftWithIndex' :: forall m s b ivar.(NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
+liftWithIndex' i comp = OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState comp)
+  where
+    compAndMoveState :: forall b.SFM s b -> GlobalState ivar s -> m (b, GlobalState ivar s)
+    compAndMoveState sf (GlobalState gsIn gsOut touchedState) = do
+      -- we define the proper order on the private state right here!
+      let ithIn = gsIn !! i
+          ithOut = gsOut !! i
+      localState <- getState ithIn -- this synchronizes access to the local state
+      (d', localState') <- liftIO $ runSF sf localState
+      release ithOut localState'
+      return (d', GlobalState gsIn gsOut $ Set.insert i touchedState)
+    idSf :: SFM s ()
+    idSf = return ()
 
 
 {-# NOINLINE release #-}
@@ -156,10 +162,10 @@ release :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 release = updateState
 
 oget :: (ParIVar ivar m) => OhuaM m s s
-oget = OhuaM (\s -> return (s,s))
+oget = OhuaM return (\s -> return (s,s))
 
 oput :: (ParIVar ivar m) => s -> OhuaM m s ()
-oput newState = OhuaM (const $ return ((), newState))
+oput newState = OhuaM return (const $ return ((), newState))
 
 updateState :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 updateState = PC.put
@@ -221,6 +227,10 @@ smap algo xs = do
           result <- PC.get computedLocalState -- is already available!
           PC.put emptyLocalState result
 
+case_ :: (NFData a, NFData s, Show a, ParIVar ivar m, NFData (ivar s))
+      => p -> [(q, OhuaM m (GlobalState ivar s) a)]
+      -> OhuaM m (GlobalState ivar s) a
+case_ = undefined
 
 
 -- envisioned API:
