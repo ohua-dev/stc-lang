@@ -80,10 +80,10 @@ instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
       moveState :: s -> m s
       moveState gs = do
         -- there is really no computation here, so no need to spawn anything
-        gs1 <- moveStateForward a gs
-        gs2 <- moveStateForward f gs
-        -- FIXME this is not correct yet!
-        return gs1
+        gs' <- moveStateForward a gs
+        moveStateForward f gs'
+        -- there is no state change here really. I could have returned gs' as well, I suppose.
+
       comp :: s -> m (b,s)
       comp gs = do
         -- run the action first. in the final monad code for OhuaM, the outermost <*>
@@ -116,7 +116,10 @@ instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
   (>>=) :: forall a b.OhuaM m s a -> (a -> OhuaM m s b) -> OhuaM m s b
   f >>= g = OhuaM moveState comp
       where
-        moveState = undefined -- TODO
+        moveState :: s -> m s
+        moveState gs = do
+          gs' <- moveStateForward f gs
+          flip moveStateForward gs' $ g $ error "Invariant broken: Don't touch me, state forward moving code!"
 
         comp :: s -> m (b, s)
         comp gs = do
