@@ -9,6 +9,7 @@
 
 
 module FuturesBasedMonad ( smap
+                         , case_
                          , liftWithIndex
                          , liftWithIndex'
                          , SF
@@ -29,6 +30,8 @@ import           Control.Arrow (first)
 --
 -- import           Control.Parallel    (pseq)
 import           Data.Set               as Set hiding (map)
+import           Data.Maybe
+import           Data.List              as List
 -- import           Debug.Trace
 import           GHC.Generics                   (Generic)
 -- import           System.IO.Unsafe
@@ -50,6 +53,9 @@ data OhuaM m globalState result = OhuaM {
 
 data GlobalState ivar s = GlobalState [ivar s] [ivar s] (Set.Set Int) deriving (Generic)
 instance (NFData s, NFData (ivar s)) => NFData (GlobalState ivar s)
+
+-- FIXME neither lfitWithIndex now smap show transport the concrete type of the global state to the outside.
+--       this type should be module-internal!
 
 --
 -- shortcoming: this monad implementation is strict because bind requests the
@@ -141,10 +147,13 @@ liftPar p = OhuaM return $ \s -> (,s) <$> p
 -- liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => String -> Int -> SF s a b -> Int -> a -> OhuaM m (GlobalState ivar s) b
 -- liftWithIndex _ i f _ d = do
 {-# NOINLINE liftWithIndex #-}
-liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
+liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m)
+              => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
 liftWithIndex i f d = liftWithIndex' i $ f d
 
-liftWithIndex' :: forall m s b ivar.(NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m) => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
+liftWithIndex' :: forall m s b ivar.
+                  (NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m)
+               => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
 liftWithIndex' i comp = OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState comp)
   where
     compAndMoveState :: forall b.SFM s b -> GlobalState ivar s -> m (b, GlobalState ivar s)
@@ -176,7 +185,8 @@ updateState = PC.put
 getState :: (ParFuture ivar m) => ivar s -> m s
 getState = PC.get -- will wait for the value
 
-runOhuaM :: (NFData a, NFData s) => OhuaM ParIO (GlobalState IVar s) a -> [s] -> IO (a,[s])
+runOhuaM :: (NFData a, NFData s)
+         => OhuaM ParIO (GlobalState IVar s) a -> [s] -> IO (a,[s])
 runOhuaM comp initialState = PIO.runParIO $ do
   inState <- mapM PC.newFull initialState
   outState <- forM initialState $ const PC.new
@@ -189,10 +199,13 @@ runOhuaM comp initialState = PIO.runParIO $ do
 -- version used for debugging:
 -- smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (Int -> a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
 {-# NOINLINE smap #-}
-smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
+smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m)
+     => (a -> OhuaM m (GlobalState ivar s) b) -> [a]
+     -> OhuaM m (GlobalState ivar s) [b]
 smap algo xs = do
   (GlobalState gsIn gsOut touched) <- oget -- get me the initial state
-  futures <- liftPar $ smap' algo xs [0..] gsIn touched
+  -- futures <- liftPar $ smap' algo xs [0..] gsIn touched -- debugging version
+  futures <- liftPar $ smap' algo xs gsIn touched
   results <- liftPar $ forM futures PC.get -- collect the results
   let result = map fst results
   let (GlobalState _ gsOut' touchedSMap) = (last . map snd) results
@@ -206,22 +219,26 @@ smap algo xs = do
                         (a -> OhuaM m (GlobalState ivar s) b) ->
                         -- debugging: (Int -> a -> OhuaM m (GlobalState ivar s) b) ->
                         [a] ->
-                        [Int] ->
+                        -- [Int] -> -- debugging version
                         [ivar s] ->
                         Set Int ->
                         m [ivar (b, GlobalState ivar s)]
-    smap' f (y:ys) (ident:idents) prevState touched = do
+    -- smap' _ [] _ _ _ = return [] -- debugging version
+    -- smap' f (y:ys) (ident:idents) prevState touched = do -- debugging version
+    smap' f (y:ys) prevState touched = do
       outS <- forM prevState $ const PC.new -- create the new output state
       -- debugging: result <- PC.spawn $ runOhua (f ident y) $ GlobalState prevState outS Set.empty
       result <- PC.spawn $ runOhua (f y) $ GlobalState prevState outS Set.empty
       -- traceM $ "spawned smap computation: " ++ show ident
-      rest <- smap' f ys idents outS touched
+      rest <- smap' f ys outS touched
       return $ result : rest
-    smap' _ [] _ _ _ = return []
+    smap' _ [] _ _ = return []
+
     merge :: (NFData s, ParIVar ivar m) => [ivar s] -> [ivar s] -> Set Int -> m [ivar s]
     merge initialOut computedOut touchedSMap = do
       updateTouched computedOut initialOut touchedSMap
       return initialOut
+
     updateTouched :: (NFData s, ParIVar ivar m) => [ivar s] -> [ivar s] -> Set Int -> m ()
     updateTouched from to touched =
       forM_ (Set.toAscList touched) $ \i -> do
@@ -230,10 +247,27 @@ smap algo xs = do
           result <- PC.get computedLocalState -- is already available!
           PC.put emptyLocalState result
 
-case_ :: (NFData a, NFData s, Show a, ParIVar ivar m, NFData (ivar s))
-      => p -> [(q, OhuaM m (GlobalState ivar s) a)]
-      -> OhuaM m (GlobalState ivar s) a
-case_ = undefined
+case_ :: forall a s m p ivar.
+         (NFData a, NFData s, Show a, Eq p, ParIVar ivar m, NFData (ivar s), MonadIO m)
+      => p -> [(p, OhuaM m s a)] -> OhuaM m s a
+case_ cond patternsAndBranches = OhuaM moveState comp
+  where
+    moveState :: s -> m s
+    moveState gs = (foldM (flip moveStateForward) gs . map snd) patternsAndBranches
+
+    comp :: s -> m (a, s)
+    comp gs = do
+      -- find the first pattern that matches
+      let idx = List.findIndex ((cond == ) . fst) patternsAndBranches
+      let ith = fromMaybe (error "No pattern found for condition.") idx
+
+      -- one could of course do the following in parallel but it is not a performance bottleneck as of now.
+
+      let trueBranch = patternsAndBranches !! ith
+      let falseBranches = ((\(before, _:after) -> before ++ after) . List.splitAt ith) patternsAndBranches
+      (result, gs') <- runOhua (snd trueBranch) gs
+      gs'' <- foldM (flip moveStateForward) gs' $ map snd falseBranches
+      return (result,gs'')
 
 
 -- envisioned API:

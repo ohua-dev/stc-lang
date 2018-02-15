@@ -7,7 +7,6 @@ import Test.HUnit hiding (State)
 import Test.Framework
 import Test.Framework.Providers.HUnit
 -- import Data.Monoid
-import Control.Monad
 -- import Utils
 
 import FuturesBasedMonad
@@ -31,7 +30,7 @@ simpleComposition v = do
   r1 <- liftWithIndex 1 bar r0
   return r1
 
-simpleSMap v = smap simpleComposition v
+simpleSMap = smap simpleComposition
 
 smapWithContext v = do
   c <- return v
@@ -49,13 +48,24 @@ smapResultUsed v = do
   r4 <- liftWithIndex 5 bar $ r2 !! 1
   return (r3,r4)
 
-
 simpleCompositionPackaged v = do
   c <- return v
   r0 <- liftWithIndex' 0 $ foo c
   r1 <- liftWithIndex' 1 $ bar r0
   return r1
 
+caseComposition v = do
+  c <- liftWithIndex 0 foo v
+  o <- case_ c [
+                 (4, branch1 c)
+               , (8, branch2 c)
+               ]
+  return o
+  where
+    branch1 = liftWithIndex 1 bar
+    branch2 = liftWithIndex 2 bar
+
+smapWithCase = smap caseComposition
 
 returnTest :: Assertion
 returnTest = do
@@ -93,6 +103,27 @@ packagedBindTest = do
   assertEqual "result was wrong." 36 result
   assertEqual "state was wrong." [2,3] s
 
+caseTest :: Assertion
+caseTest = do
+  -- "true" branch
+  (result,s) <- runOhuaM (caseComposition 2) [0,0,0]
+  assertEqual "result was wrong." 12 result
+  assertEqual "state was wrong." [2,3,0] s
+
+  -- "false" branch
+  (result',s') <- runOhuaM (caseComposition 6) [0,0,0]
+  assertEqual "result was wrong." 24 result'
+  assertEqual "state was wrong." [2,0,3] s'
+
+caseSmapTest :: Assertion
+caseSmapTest = do
+  -- "true" branch
+  (result,s) <- runOhuaM (smapWithCase [2,6]) [0,0,0]
+  assertEqual "result was wrong." [12,24] result
+  assertEqual "state was wrong." [4,3,3] s
+
+
+
 testSuite :: [Test.Framework.Test]
 testSuite = [
               testCase "Futures: checking monadic return" returnTest
@@ -101,4 +132,6 @@ testSuite = [
             , testCase "Futures: checking smap with context" smapContextTest
             , testCase "Futures: checking smap result used" smapResultUsedTest
             , testCase "Futures: checking packegd version" packagedBindTest
+            , testCase "Futures: checking case statement" caseTest
+            , testCase "Futures: checking smap-case composition" caseSmapTest
             ]
