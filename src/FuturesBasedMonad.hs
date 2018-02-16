@@ -4,6 +4,9 @@
 {-# LANGUAGE ScopedTypeVariables  #-}
 {-# LANGUAGE TupleSections        #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ExistentialQuantification #-}
+
+{-# LANGUAGE Rank2Types #-}
 
 --- this implementation does not rely on channels. it builds on futures!
 
@@ -46,10 +49,60 @@ type SF s a b = a -> SFM s b
 runSF :: SFM s b -> s -> IO (b,s)
 runSF = runStateT
 
-data OhuaM m globalState result = OhuaM {
-                              moveStateForward :: globalState -> m globalState,
-                              runOhua :: globalState -> m (result, globalState)
-                             }
+-- data OhuaM m globalState result = OhuaM {
+--                               moveStateForward :: globalState -> m globalState,
+--                               runOhua :: globalState -> m (result, globalState)
+--                              }
+
+-- this existential quantification essentially hides the types for ivar and m.
+-- this forces somebody with a variable of that type to apply it only to a predefined
+-- function that knows what the type of 'ivar' and 'm' is.
+-- this way, the types are entirely hidden inside that module and restrict the user/caller
+-- to a very specific function, i.e., runOhua and moveStateForward.
+-- I love that!
+-- sources: https://prime.haskell.org/wiki/ExistentialQuantification
+--          https://stackoverflow.com/questions/12031878/what-is-the-purpose-of-rank2types#12033549
+-- data OhuaM state result = forall ivar m. (ParIVar ivar m)
+--                         => OhuaM {
+--                              moveStateForward :: GlobalState ivar state -> m (GlobalState ivar state),
+--                              runOhua :: GlobalState ivar state -> m (result, GlobalState ivar state)
+--                             }
+-- when the data constructor OhuaM is called then the type variables are
+-- captured with the according types. when the according functions are called later on, then
+-- the input to that call must match the captured types now.
+
+-- the above version quantifies over the whole creation of the data type. it becomes:
+-- forall ivar m. (ParIVar ivar m) => ((GlobalState ivar state) -> m (GlobalState ivar state))
+--                                 -> ((GlobalState ivar state) -> m (result, GlobalState ivar state))
+--                                 -> OhuaM state result
+-- but we want to have Rank2Types instead to hide ivar and m! (see the example below!)
+data OhuaM state result = OhuaM {
+                             moveStateForward :: forall ivar m. (ParIVar ivar m, MonadIO m)
+                                               => GlobalState ivar state -> m (GlobalState ivar state),
+                             runOhua :: forall ivar m.
+                                        ( NFData state
+                                        , NFData (ivar state)
+                                        , ParIVar ivar m
+                                        , MonadIO m) -- FIXME giving the MonadIO constraint here seems weird to me because then it totally breaks the abstraction and could write ParIO directly.
+                                     => GlobalState ivar state -> m (result, GlobalState ivar state)
+                            }
+-- Example: ExistentialQuantification vs Rank2Types
+-- Prelude> set: -XExistentialQuantification
+-- Prelude> data T s r = forall ivar m. (Show ivar, Monad m) => TR { f :: (s,ivar) -> m (ivar,s) }
+-- Prelude> :t TR
+-- TR :: (Monad m, Show ivar) => ((s, ivar) -> m (ivar, s)) -> T s r
+-- that is:
+-- TR :: forall ivar m. (Monad m, Show ivar) => ((s, ivar) -> m (ivar, s)) -> T s r
+-- BUT:
+-- Prelude> set: -Rank2Types
+-- Prelude> data T s r = TR { f :: forall ivar m. (Show ivar, Monad m) => (s,ivar) -> m (ivar,s) }
+-- translates to:
+-- Prelude> :t TR
+-- TR :: (forall ivar (m :: * -> *). (Show ivar, Monad m) => (s, ivar) -> m (ivar, s)) -> T s r
+--
+-- ExistentialQuantification makes only sense when we quantify over the output of a function (i.e.)
+-- the type of a record. that is because each function captures its own type variable so you can not
+-- compose such data as I tried in <*> or =<< with GlobalState (which came from another data).
 
 data GlobalState ivar s = GlobalState [ivar s] [ivar s] (Set.Set Int) deriving (Generic)
 instance (NFData s, NFData (ivar s)) => NFData (GlobalState ivar s)
@@ -71,32 +124,36 @@ instance (NFData s, NFData (ivar s)) => NFData (GlobalState ivar s)
 --              do
 --                (x1,x2,x3) <- (,,) <$> a 5 <*> a 5 <*> a 5
 --
-instance (Functor m) => Functor (OhuaM m s) where
+instance Functor (OhuaM s) where
   fmap f g = OhuaM (moveStateForward g) $ fmap (first f) . runOhua g
 
-instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
+instance (NFData s) => Applicative (OhuaM s) where
   pure = return
   -- TODO (<*>) = Control.Monad.ap  this is a requirement if the functor is also a monad.
   -- this is the case so we should create a new functor that is not a monad but only an applicative.
   -- in order to do so we need to provide a OhuaM computation in the new applicative functor that
   -- can be ready executed via runOhua! - (Haxl doesn't care)
-  (<*>) :: forall a b.OhuaM m s (a -> b) -> OhuaM m s a -> OhuaM m s b
+  (<*>) :: forall a b.OhuaM s (a -> b) -> OhuaM s a -> OhuaM s b
   f <*> a = OhuaM moveState comp
     where
-      moveState :: s -> m s
+      moveState :: forall ivar m. (ParIVar ivar m, MonadIO m)
+                => GlobalState ivar s -> m (GlobalState ivar s)
       moveState gs = do
         -- there is really no computation here, so no need to spawn anything
         gs' <- moveStateForward a gs
         moveStateForward f gs'
         -- there is no state change here really. I could have returned gs' as well, I suppose.
 
-      comp :: s -> m (b,s)
+      comp :: forall ivar m.
+              (NFData (ivar s), ParIVar ivar m, MonadIO m)
+           => GlobalState ivar s -> m (b, GlobalState ivar s)
       comp gs = do
         -- run the action first. in the final monad code for OhuaM, the outermost <*>
         -- will execute first. as a result of this code, we will recursively go and
         -- spawn the tasks for the arguments which can happily execute in parallel
         -- until we reach the bottom of the recursion, i.e., the pure function.
         -- then the recursion unwinds again gathering all the results.
+
         aVar <- PC.spawn_ $ runOhua a gs -- TODO force evaluation here
 
         -- run the function
@@ -113,21 +170,24 @@ instance (NFData s, ParIVar ivar m) => Applicative (OhuaM m s) where
   -- (Collected pf1 sfs1) <*> (Collected pf2 sfs2) = Collected pf1 (sfs1 ++ (pf2:sfs2))
   --  -- this collecting is only stopped by the monadic bind operator!
 
-instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
+instance (NFData s) => Monad (OhuaM s) where
   {-# NOINLINE return #-}
-  return :: forall a.a -> OhuaM m s a
+  return :: forall a.a -> OhuaM s a
   return v = OhuaM return $ \s -> return (v, s)
 
   {-# NOINLINE (>>=) #-}
-  (>>=) :: forall a b.OhuaM m s a -> (a -> OhuaM m s b) -> OhuaM m s b
+  (>>=) :: forall a b.OhuaM s a -> (a -> OhuaM s b) -> OhuaM s b
   f >>= g = OhuaM moveState comp
       where
-        moveState :: s -> m s
+        moveState :: forall ivar m. (ParIVar ivar m, MonadIO m)
+                  => GlobalState ivar s -> m (GlobalState ivar s)
         moveState gs = do
           gs' <- moveStateForward f gs
           flip moveStateForward gs' $ g $ error "Invariant broken: Don't touch me, state forward moving code!"
 
-        comp :: s -> m (b, s)
+        comp :: forall ivar m.
+                (NFData (ivar s), ParIVar ivar m, MonadIO m)
+             => GlobalState ivar s -> m (b, GlobalState ivar s)
         comp gs = do
           -- there is no need to spawn here!
           -- pipeline parallelism is solely created by smap.
@@ -136,27 +196,22 @@ instance (NFData s, ParIVar ivar m) => Monad (OhuaM m s) where
           (result1, gs'') <- runOhua (g result0) gs'
           return (result1, gs'')
 
-instance (NFData s, ParIVar ivar m, MonadIO m) => MonadIO (OhuaM m s) where
-  liftIO :: IO a -> OhuaM m s a
+instance (NFData s) => MonadIO (OhuaM s) where
+  liftIO :: IO a -> OhuaM s a
   liftIO ioAction = OhuaM return $ \s -> (,s) <$> liftIO ioAction
 
-liftPar :: (ParIVar ivar m) => m a -> OhuaM m (GlobalState ivar s) a
-liftPar p = OhuaM return $ \s -> (,s) <$> p
-
--- version with more input used for debugging:
--- liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m) => String -> Int -> SF s a b -> Int -> a -> OhuaM m (GlobalState ivar s) b
--- liftWithIndex _ i f _ d = do
 {-# NOINLINE liftWithIndex #-}
-liftWithIndex :: (NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m)
-              => Int -> SF s a b -> a -> OhuaM m (GlobalState ivar s) b
+liftWithIndex :: (NFData s, Show a)
+              => Int -> SF s a b -> a -> OhuaM s b
 liftWithIndex i f d = liftWithIndex' i $ f d
 
-liftWithIndex' :: forall m s b ivar.
-                  (NFData s, ParIVar ivar m, NFData (ivar s), MonadIO m)
-               => Int -> SFM s b -> OhuaM m (GlobalState ivar s) b
+liftWithIndex' :: forall s b.
+                  (NFData s)
+               => Int -> SFM s b -> OhuaM s b
 liftWithIndex' i comp = OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState comp)
   where
-    compAndMoveState :: forall b.SFM s b -> GlobalState ivar s -> m (b, GlobalState ivar s)
+    compAndMoveState :: forall ivar m a. (ParIVar ivar m, MonadIO m)
+                     => SFM s a -> GlobalState ivar s -> m (a, GlobalState ivar s)
     compAndMoveState sf (GlobalState gsIn gsOut touchedState) = do
       -- we define the proper order on the private state right here!
       let ithIn = gsIn !! i
@@ -173,12 +228,6 @@ liftWithIndex' i comp = OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveSta
 release :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 release = updateState
 
-oget :: (ParIVar ivar m) => OhuaM m s s
-oget = OhuaM return (\s -> return (s,s))
-
-oput :: (ParIVar ivar m) => s -> OhuaM m s ()
-oput newState = OhuaM return (const $ return ((), newState))
-
 updateState :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 updateState = PC.put
 
@@ -186,7 +235,7 @@ getState :: (ParFuture ivar m) => ivar s -> m s
 getState = PC.get -- will wait for the value
 
 runOhuaM :: (NFData a, NFData s)
-         => OhuaM ParIO (GlobalState IVar s) a -> [s] -> IO (a,[s])
+         => OhuaM s a -> [s] -> IO (a,[s])
 runOhuaM comp initialState = PIO.runParIO $ do
   inState <- mapM PC.newFull initialState
   outState <- forM initialState $ const PC.new
@@ -199,30 +248,42 @@ runOhuaM comp initialState = PIO.runParIO $ do
 -- version used for debugging:
 -- smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (Int -> a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
 {-# NOINLINE smap #-}
-smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m)
-     => (a -> OhuaM m (GlobalState ivar s) b) -> [a]
-     -> OhuaM m (GlobalState ivar s) [b]
-smap algo xs = do
-  (GlobalState gsIn gsOut touched) <- oget -- get me the initial state
-  -- futures <- liftPar $ smap' algo xs [0..] gsIn touched -- debugging version
-  futures <- liftPar $ smap' algo xs gsIn touched
-  results <- liftPar $ forM futures PC.get -- collect the results
-  let result = map fst results
-  let (GlobalState _ gsOut' touchedSMap) = (last . map snd) results
-  -- merge: find the local states touched by the computation f and
-  --        move them over to gsOut
-  gsOut'' <- liftPar $ merge gsOut gsOut' touchedSMap
-  oput $ GlobalState gsIn gsOut'' $ Set.union touched touchedSMap
-  return result
+smap :: forall s a b.(NFData b, NFData s, Show a)
+     => (a -> OhuaM s b) -> [a] -> OhuaM s [b]
+smap algo xs = case xs of
+    [] -> OhuaM moveState (fmap (([]::[b]),) . moveState) -- if no data was given then just move the state.
+    _  -> OhuaM moveState comp
   where
-    smap' :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) =>
-                        (a -> OhuaM m (GlobalState ivar s) b) ->
-                        -- debugging: (Int -> a -> OhuaM m (GlobalState ivar s) b) ->
-                        [a] ->
-                        -- [Int] -> -- debugging version
-                        [ivar s] ->
-                        Set Int ->
-                        m [ivar (b, GlobalState ivar s)]
+    -- all we need to do is to move the state once, no need to do it for each
+    -- of the elements in the array!
+    moveState :: forall ivar m. (ParIVar ivar m, MonadIO m)
+              => GlobalState ivar s -> m (GlobalState ivar s)
+    moveState = moveStateForward $ algo $ head xs
+
+    comp :: forall ivar m.
+            (NFData (ivar s), ParIVar ivar m, MonadIO m)
+         => GlobalState ivar s -> m ([b], GlobalState ivar s)
+    comp (GlobalState gsIn gsOut touched) = do
+      -- futures <- smap' algo xs [0..] gsIn touched -- debugging version
+      futures <- smap' algo xs gsIn touched
+      results <- forM futures PC.get -- collect the results
+      let result = map fst results
+      let (GlobalState _ gsOut' touchedSMap) = (last . map snd) results
+      -- merge: find the local states touched by the computation f and
+      --        move them over to gsOut
+      gsOut'' <- merge gsOut gsOut' touchedSMap
+      return (result, GlobalState gsIn gsOut'' $ Set.union touched touchedSMap)
+
+    -- This function replicates the state as many times as their are values in
+    -- the list and spawns the computation.
+    smap' :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s), MonadIO m)
+          => (a -> OhuaM s b)
+             -- debugging: (Int -> a -> OhuaM m (GlobalState ivar s) b) ->
+          -> [a]
+            -- [Int] -> -- debugging version
+          -> [ivar s]
+          -> Set Int
+          -> m [ivar (b, GlobalState ivar s)]
     -- smap' _ [] _ _ _ = return [] -- debugging version
     -- smap' f (y:ys) (ident:idents) prevState touched = do -- debugging version
     smap' f (y:ys) prevState touched = do
@@ -247,15 +308,17 @@ smap algo xs = do
           result <- PC.get computedLocalState -- is already available!
           PC.put emptyLocalState result
 
-case_ :: forall a s m p ivar.
-         (NFData a, NFData s, Show a, Eq p, ParIVar ivar m, NFData (ivar s), MonadIO m)
-      => p -> [(p, OhuaM m s a)] -> OhuaM m s a
+case_ :: forall a s p.
+         (NFData a, NFData s, Show a, Eq p)
+      => p -> [(p, OhuaM s a)] -> OhuaM s a
 case_ cond patternsAndBranches = OhuaM moveState comp
   where
-    moveState :: s -> m s
+    moveState :: forall ivar m. (ParIVar ivar m, MonadIO m)
+              => GlobalState ivar s -> m (GlobalState ivar s)
     moveState gs = (foldM (flip moveStateForward) gs . map snd) patternsAndBranches
 
-    comp :: s -> m (a, s)
+    comp :: forall ivar m. (NFData (ivar s), ParIVar ivar m, Monad m, MonadIO m)
+              => GlobalState ivar s -> m (a, GlobalState ivar s)
     comp gs = do
       -- find the first pattern that matches
       let idx = List.findIndex ((cond == ) . fst) patternsAndBranches
