@@ -18,6 +18,7 @@ module FuturesBasedMonad ( smap
                          , SF
                          , SFM
                          , runOhuaM
+                         , OhuaM
                          ) where
 
 import           Control.Monad
