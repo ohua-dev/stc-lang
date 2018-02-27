@@ -77,50 +77,50 @@ bindTest :: Assertion
 bindTest = do
   (result,s) <- runOhuaM (simpleComposition 10) [0,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] s
+  assertEqual "state was wrong." [2,3] (s::[Int])
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
   (result,s) <- runOhuaM (simpleSMap [10,10]) [0,0]
   assertEqual "result was wrong." [36,36] result
-  assertEqual "state was wrong." [4,6] s
+  assertEqual "state was wrong." [4,6] (s::[Int])
 
 smapContextTest :: Assertion
 smapContextTest = do
   (result,s) <- runOhuaM (smapWithContext 10) [0,0,0,0]
   assertEqual "result was wrong." [42,114] result
-  assertEqual "state was wrong." [4,6,2,3] s
+  assertEqual "state was wrong." [4,6,2,3] (s::[Int])
 
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
   (result,s) <- runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
   assertEqual "result was wrong." (44,342) result
-  assertEqual "state was wrong." [4,6,2,3,2,3] s
+  assertEqual "state was wrong." [4,6,2,3,2,3] (s::[Int])
 
 packagedBindTest :: Assertion
 packagedBindTest = do
   (result,s) <- runOhuaM (simpleCompositionPackaged 10) [0,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] s
+  assertEqual "state was wrong." [2,3] (s::[Int])
 
 caseTest :: Assertion
 caseTest = do
   -- "true" branch
   (result,s) <- runOhuaM (caseComposition 2) [0,0,0]
   assertEqual "result was wrong." 12 result
-  assertEqual "state was wrong." [2,3,0] s
+  assertEqual "state was wrong." [2,3,0] (s::[Int])
 
   -- "false" branch
   (result',s') <- runOhuaM (caseComposition 6) [0,0,0]
   assertEqual "result was wrong." 24 result'
-  assertEqual "state was wrong." [2,0,3] s'
+  assertEqual "state was wrong." [2,0,3] (s'::[Int])
 
 caseSmapTest :: Assertion
 caseSmapTest = do
   -- "true" branch
   (result,s) <- runOhuaM (smapWithCase [2,6]) [0,0,0]
   assertEqual "result was wrong." [12,24] result
-  assertEqual "state was wrong." [4,3,3] s
+  assertEqual "state was wrong." [4,3,3] (s::[Int])
 
 
 
