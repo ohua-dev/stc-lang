@@ -23,11 +23,23 @@ bar x = do
   put $ s+3
   return $ x*3
 
+barFloat :: Int -> StateT Float IO Int
+barFloat x = do
+  s <- get
+  put $ s+3.34
+  return $ x*3
+
 -- simpleAlgo :: Int -> OhuaM ([LocalStateBox Int], [LocalStateBox Int]) Int
 simpleComposition v = do
   c <- return v
   r0 <- liftWithIndex 0 foo c
   r1 <- liftWithIndex 1 bar r0
+  return r1
+
+simpleCompositionHetState v = do
+  c <- return v
+  r0 <- liftWithIndex 0 foo c
+  r1 <- liftWithIndex 1 barFloat r0
   return r1
 
 simpleSMap = smap simpleComposition
@@ -67,62 +79,73 @@ caseComposition v = do
 
 smapWithCase = smap caseComposition
 
+ret = return (10::Int)
+
 returnTest :: Assertion
 returnTest = do
-  (result,s) <- runOhuaM (return (10::Int)) ([]::[Int])
+  (result,s) <- runOhuaM ret []
   assertEqual "result was wrong." (10::Int) result
-  assertEqual "state was wrong." ([]::[Int]) s
+  assertEqual "state was wrong." [] (map fromS s :: [Int])
 
 bindTest :: Assertion
 bindTest = do
-  (result,s) <- runOhuaM (simpleComposition 10) [0,0]
+  (result,s) <- runOhuaM (simpleComposition 10) $ map toS [0::Int,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] (s::[Int])
+  assertEqual "state was wrong." [2,3] (map fromS s :: [Int])
+
+hetStateTest :: Assertion
+hetStateTest = do
+  (result,s1:(s2:_)) <- runOhuaM (simpleCompositionHetState 10) [ toS (0::Int)
+                                                            , toS (2.5::Float)
+                                                            ]
+  assertEqual "result was wrong." 36 result
+  assertEqual "state was wrong." 2 (fromS s1 :: Int)
+  assertEqual "state was wrong." 5.84 (fromS s2 :: Float)
+  -- assertEqual "state was wrong." 2 (toConcrete s1 :: Int)
+  -- assertEqual "state was wrong." 5.84 (toConcrete s2 :: Float)
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
-  (result,s) <- runOhuaM (simpleSMap [10,10]) [0,0]
+  (result,s) <- runOhuaM (simpleSMap [10,10]) $ map toS [0::Int,0]
   assertEqual "result was wrong." [36,36] result
-  assertEqual "state was wrong." [4,6] (s::[Int])
+  assertEqual "state was wrong." [4,6] (map fromS s :: [Int])
 
 smapContextTest :: Assertion
 smapContextTest = do
-  (result,s) <- runOhuaM (smapWithContext 10) [0,0,0,0]
+  (result,s) <- runOhuaM (smapWithContext 10) $ map toS [0::Int,0,0,0]
   assertEqual "result was wrong." [42,114] result
-  assertEqual "state was wrong." [4,6,2,3] (s::[Int])
+  assertEqual "state was wrong." [4,6,2,3] (map fromS s :: [Int])
 
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
-  (result,s) <- runOhuaM (smapResultUsed 10) [0,0,0,0,0,0]
+  (result,s) <- runOhuaM (smapResultUsed 10) $ map toS [0::Int,0,0,0,0,0]
   assertEqual "result was wrong." (44,342) result
-  assertEqual "state was wrong." [4,6,2,3,2,3] (s::[Int])
+  assertEqual "state was wrong." [4,6,2,3,2,3] (map fromS s :: [Int])
 
 packagedBindTest :: Assertion
 packagedBindTest = do
-  (result,s) <- runOhuaM (simpleCompositionPackaged 10) [0,0]
+  (result,s) <- runOhuaM (simpleCompositionPackaged 10) $ map toS [0::Int,0]
   assertEqual "result was wrong." 36 result
-  assertEqual "state was wrong." [2,3] (s::[Int])
+  assertEqual "state was wrong." [2,3] (map fromS s :: [Int])
 
 caseTest :: Assertion
 caseTest = do
   -- "true" branch
-  (result,s) <- runOhuaM (caseComposition 2) [0,0,0]
+  (result,s) <- runOhuaM (caseComposition 2) $ map toS [0::Int,0,0]
   assertEqual "result was wrong." 12 result
-  assertEqual "state was wrong." [2,3,0] (s::[Int])
+  assertEqual "state was wrong." [2,3,0] (map fromS s :: [Int])
 
   -- "false" branch
-  (result',s') <- runOhuaM (caseComposition 6) [0,0,0]
+  (result',s') <- runOhuaM (caseComposition 6) $ map toS [0::Int,0,0]
   assertEqual "result was wrong." 24 result'
-  assertEqual "state was wrong." [2,0,3] (s'::[Int])
+  assertEqual "state was wrong." [2,0,3] (map fromS s' :: [Int])
 
 caseSmapTest :: Assertion
 caseSmapTest = do
   -- "true" branch
-  (result,s) <- runOhuaM (smapWithCase [2,6]) [0,0,0]
+  (result,s) <- runOhuaM (smapWithCase [2,6]) $ map toS [0::Int,0,0]
   assertEqual "result was wrong." [12,24] result
-  assertEqual "state was wrong." [4,3,3] (s::[Int])
-
-
+  assertEqual "state was wrong." [4,3,3] (map fromS s :: [Int])
 
 testSuite :: [Test.Framework.Test]
 testSuite = [
@@ -134,4 +157,5 @@ testSuite = [
             , testCase "Futures: checking packegd version" packagedBindTest
             , testCase "Futures: checking case statement" caseTest
             , testCase "Futures: checking smap-case composition" caseSmapTest
+            , testCase "Futures: heterogeneous state" hetStateTest
             ]
