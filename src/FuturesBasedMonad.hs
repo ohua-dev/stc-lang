@@ -22,6 +22,7 @@ module FuturesBasedMonad ( smap
                          , OhuaM
                          , fromS
                          , toS
+                         , S
                          ) where
 
 import           Control.Monad
