@@ -19,6 +19,7 @@
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
@@ -68,83 +69,17 @@ import           Ohua.ParseTools.Refs     (ohuaLangNS)
 import           Ohua.Types
 import           Ohua.Unit
 import qualified Ohua.Util.Str            as Str
-import           Unsafe.Coerce
-
-#if __GLASGOW_HASKELL__ >= 802
-import qualified Type.Reflection          as Refl
-import qualified Type.Reflection.Unsafe   as Refl
-#endif
-
-
-
-#if __GLASGOW_HASKELL__ >= 802
-mkTyConApp :: TyCon -> [TypeRep] -> TypeRep
-mkTyConApp con args = Refl.SomeTypeRep $ Refl.mkTrCon con args
-#endif
--- Utils
-
-
--- | Coerce a dynamic to a value.
--- If the expected type is not the one inside the 'Dynamic' it throws an error showing both types.
-forceDynamic :: forall a . Typeable a => Dynamic -> a
-forceDynamic dyn
-  | Just a <- fromDynamic dyn = a
-  | otherwise = throw $ TypeCastException rep (dynTypeRep dyn)
-  where rep = typeRep (Proxy :: Proxy a)
-
-
-data TypeCastException = TypeCastException TypeRep TypeRep
-  deriving (Typeable, Show)
-
-instance Exception TypeCastException where
-  displayException (TypeCastException expected recieved) =
-    "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
-
-extractList :: Dynamic -> [Dynamic]
-extractList (Dynamic trl dl) = map f l
-  where
-    f = Dynamic tra
-    [tra] = typeRepArgs trl
-    l = unsafeCoerce dl
-
-injectList :: [Dynamic] -> Dynamic
-injectList [] = error "Cannot convert empty list yet"
-injectList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
-  where
-    unwrap (Dynamic _ v) = v
-    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [()]))) [tra]
-
-destructureTuple :: Int -> Dynamic -> Dynamic
-destructureTuple i (Dynamic rep a) = Dynamic (types !! i) value
-  where
-    (tyCon, types) = splitTyConApp rep
-    mkEntry :: forall t . Typeable t => (t -> Int -> ()) -> (TyCon, ())
-    mkEntry f = (typeRepTyCon (typeRep (Proxy :: Proxy t)), f (unsafeCoerce a :: t) i)
-    value = unsafeCoerce $ fromMaybe (error "out of bounds") $ lookup tyCon
-      [ mkEntry $ \(OneTuple a) -> \case 0 -> a; _ -> error "out of bounds"
-      , mkEntry $ \(a, b) -> \case 0 -> a; 1 -> b; _ -> error "out of bounds"
-      , mkEntry $ \(a, b, c) -> \case 0 -> a; 1 -> b; 3 -> c; _ -> error "out of bounds"
-      , mkEntry $ \(a, b, c, d) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; _ -> error "out of bounds"
-      , mkEntry $ \(a, b, c, d, e) -> \case 0 -> a; 1 -> b; 3 -> c; 4 -> d; 5 -> e; _ -> error "out of bounds"
-      ]
-
-
-lToTup :: [Dynamic] -> Dynamic
-lToTup [] = error "cannot convert empty list"
-lToTup l = Dynamic (mkTyConApp tycon types) d
-  where
-    (types, items) = unzip $ map (\(Dynamic ty d) -> (ty, d)) l
-    mkEntry (a :: t) = (typeRepTyCon (typeRep (Proxy :: Proxy t)), unsafeCoerce a)
-    (tycon, d) = case map unsafeCoerce items of
-          [a] -> mkEntry $ OneTuple (a :: ())
-          [a, b] -> mkEntry (a, b)
-          [a, b, c] -> mkEntry (a, b, c)
-          [a, b, c, d] -> mkEntry (a, b, c, d)
-          _ -> error "wrapping not supported for this many arguments yet"
+import           Type.Magic
 
 
 united :: Lens' s ()
 united f s = const s <$> f ()
+
+printDebugInfo :: Bool
+printDebugInfo = True
+
+debugPrint :: String -> IO ()
+debugPrint = if printDebugInfo then putStrLn else const $ pure ()
 
 -- The free monad
 
@@ -172,7 +107,7 @@ data Sf fnType
     ( ReturnType fnType ~ SfMonad state returnType
     , Typeable returnType
     , ApplyVars fnType
-    ) => Sf fnType -- reference to the actual function
+    ) => Sf fnType (Maybe QualifiedBinding) -- reference to the actual function
 
 
 -- | A way to retrieve and update local state in a larger state structure
@@ -236,7 +171,7 @@ liftSf :: ( ReturnType f ~ SfMonad state ret
           , Typeable ret
           , ApplyVars f)
        => f -> Sf f
-liftSf f = Sf f
+liftSf f = Sf f Nothing
 
 
 -- | A convenience function.
@@ -411,7 +346,9 @@ createAlgo astm = graphToAlgo dict <$> runCompiler expr
 
 registerFunction :: NodeType s -> EvalASTM s QualifiedBinding
 registerFunction n = do
-  name <- generateSFunctionName
+  name <- case n of
+            CallSf (SfRef (Sf _ (Just predefinedName)) _) -> pure predefinedName
+            _                                   -> generateSFunctionName
   EvalASTM $ _1 . at name .= Just n
   pure name
 
@@ -717,7 +654,7 @@ instance ApplyVars (SfMonad state retType) where
 runFunc :: SfRef globalState
         -> IORef globalState
         -> StreamInit ()
-runFunc (SfRef (Sf f) accessor) stTrack = pure $ do
+runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
   inVars <- recieveAllUntyped
   s <- liftIO $ readIORef stTrack
   (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
@@ -732,7 +669,7 @@ mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] ->
 mountStreamProcessor name process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
-    Left Nothing  -> pure () --putStrLn $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
+    Left Nothing  -> debugPrint $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
     Left (Just _) -> putStrLn $ show name ++ " finished with leftover packets" --error "There were packets left over when a processor exited"
     Right ()      -> error "impossible"
   where

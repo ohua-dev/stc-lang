@@ -17,9 +17,18 @@ library
   hs-source-dirs:      src
   -- exposed-modules:     FuturesBasedMonad
   -- exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, Scheduler, SchedulerInternal
-  exposed-modules:     Statefulness, Sfc, FuturesBasedMonad, StreamsBasedFreeMonad, StreamsBasedExplicitAPI
-  other-modules: Data.Dynamic2
-  build-depends:       base,
+  exposed-modules:     Statefulness
+                     , Sfc
+                     , FuturesBasedMonad
+                     , StreamsBasedFreeMonad
+                     , StreamsBasedExplicitAPI
+                     , Type.Magic
+                     , Data.Dynamic2
+  if impl(ghc >= 8.2.0)
+     other-modules: Type.Magic.GHC8
+  else
+     other-modules: Type.Magic.OldGHC
+  build-depends:       base >= 4.7 && < 5,
                        mtl,
                        monad-par,
                        deepseq,
