@@ -1,13 +1,13 @@
-{-# LANGUAGE DeriveGeneric        #-}
-{-# LANGUAGE ExplicitForAll       #-}
-{-# LANGUAGE InstanceSigs         #-}
-{-# LANGUAGE ScopedTypeVariables  #-}
-{-# LANGUAGE TupleSections        #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DeriveGeneric             #-}
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ExplicitForAll            #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE InstanceSigs              #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE TupleSections             #-}
+{-# LANGUAGE UndecidableInstances      #-}
 
-{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE Rank2Types                #-}
 
 --- this implementation does not rely on channels. it builds on futures!
 
@@ -27,26 +27,25 @@ module FuturesBasedMonad ( smap
 
 import           Control.Monad
 -- import           Control.Monad.Par       as P
-import           Control.Monad.Par.IO    as PIO
+import           Control.Arrow           (first)
 import           Control.Monad.Par.Class as PC
+import           Control.Monad.Par.IO    as PIO
 import           Control.Monad.State     as S
-import           Control.Arrow (first)
 --
 -- for debugging only:
 -- import Scheduler as P
 -- import Control.DeepSeq
 --
 -- import           Control.Parallel    (pseq)
-import           Data.Set               as Set hiding (map)
-import           Data.Maybe
-import           Data.List              as List
-import           Data.Typeable
 import           Data.Dynamic2
+import           Data.List               as List
+import           Data.Maybe
+import           Data.Set                as Set hiding (map)
+import           Data.Typeable
 -- import           Debug.Trace
-import           GHC.Generics                   (Generic)
+import           GHC.Generics            (Generic)
 -- import           System.IO.Unsafe
 import           Control.DeepSeq
-import           StreamsBasedFreeMonad (forceDynamic)
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b
