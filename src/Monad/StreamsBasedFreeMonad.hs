@@ -45,7 +45,6 @@ import           Control.Monad.Free
 -- import           Control.Parallel         (pseq)
 import           Data.Default.Class
 import           Data.Dynamic2
-import           Data.DynamicUtils
 import           Data.Foldable            (fold)
 import           Data.IORef
 import           Data.Kind

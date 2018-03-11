@@ -41,15 +41,9 @@ import           Data.List               as List
 import           Data.Maybe
 import           Data.Set                as Set hiding (map)
 import           Data.Typeable
-<<<<<<< HEAD:src/Monad/FuturesBasedMonad.hs
 import           Data.StateElement
 -- import           Debug.Trace
-import           GHC.Generics                   (Generic)
-=======
--- import           Debug.Trace
-import           GHC.Generics            (Generic)
--- import           System.IO.Unsafe
->>>>>>> 3ad15b79c943594871ee68654985ae28c7d301f1:src/FuturesBasedMonad.hs
+import           GHC.Generics        (Generic)
 import           Control.DeepSeq
 
 -- type SFM s b = State s b

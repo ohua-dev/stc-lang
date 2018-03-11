@@ -6,7 +6,6 @@
 module Data.StateElement where
 
 import           Data.Dynamic2
-import           Data.DynamicUtils
 
 import           Control.DeepSeq
 

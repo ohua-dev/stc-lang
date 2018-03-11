@@ -21,14 +21,13 @@ library
                        -- debugging:
                        -- Debug.Scheduler
                        -- Debug.SchedulerInternal
-  other-modules:         Data.Dynamic2,
-                       , Data.DynamicUtils
+                       , Data.Dynamic2
                        , Data.StateElement
                        , Type.Magic
   if impl(ghc >= 8.2.0)
-    other-modules: Type.Magic.GHC8
+    other-modules:       Type.Magic.GHC8
   else
-    other-modules: Type.Magic.OldGHC
+    other-modules:       Type.Magic.OldGHC
   build-depends:       base >= 4.7 && < 5,
                        mtl,
                        monad-par,
