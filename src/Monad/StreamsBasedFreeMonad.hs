@@ -29,7 +29,7 @@ module Monad.StreamsBasedFreeMonad where
 import           Control.Monad
 import           Control.Monad.Except
 -- import           Control.Monad.Par        as P
-import           Control.Arrow            (first, (&&&), (***))
+import           Control.Arrow            (first, second, (&&&), (***))
 import           Control.Monad.Reader
 import           Control.Monad.RWS        as RWS
 import           Control.Monad.State      as S
@@ -48,10 +48,12 @@ import           Data.Dynamic2
 import           Data.Foldable            (fold)
 import           Data.IORef
 import           Data.Kind
-import           Data.List                (find, sortOn)
+import           Data.List                (find, nub, sortOn)
 import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
+import qualified Data.Set                 as Set
+import           Data.Tuple
 import           Data.Tuple.OneTuple
 import           Data.Typeable
 import           Data.Void
@@ -69,13 +71,7 @@ import           Ohua.ParseTools.Refs     (ohuaLangNS)
 import           Ohua.Types
 import           Ohua.Unit
 import qualified Ohua.Util.Str            as Str
-import           Unsafe.Coerce
-
-#if __GLASGOW_HASKELL__ >= 802
-import qualified Type.Reflection          as Refl
-import qualified Type.Reflection.Unsafe   as Refl
-#endif
-
+import           System.IO                (hPutStrLn, stderr)
 import           Type.Magic
 
 
@@ -83,10 +79,13 @@ united :: Lens' s ()
 united f s = const s <$> f ()
 
 printDebugInfo :: Bool
-printDebugInfo = True
+printDebugInfo = False
 
 debugPrint :: String -> IO ()
 debugPrint = if printDebugInfo then putStrLn else const $ pure ()
+
+logError :: MonadIO m => String -> m ()
+logError = liftIO . hPutStrLn stderr
 
 -- The free monad
 
@@ -676,9 +675,14 @@ mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] ->
 mountStreamProcessor name process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
-    Left Nothing  -> debugPrint $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
-    Left (Just _) -> putStrLn $ show name ++ " finished with leftover packets" --error "There were packets left over when a processor exited"
-    Right ()      -> error "impossible"
+    Left packetInfo ->
+      case packetInfo of
+        Nothing ->
+          debugPrint $ show name ++ " finshed gracefully"
+          -- EOS marker appeared, this is what *should* happen
+        Just _ ->
+          error "There were packets left over when a processor exited"
+    Right () -> logError $ "IMPOSSIBLE: operator terminated without exception"
   where
     safeProc = do
       proc_ <- process
@@ -692,6 +696,30 @@ customAsync thing = async $ thing `catch` \e -> do
   putStrLn (displayException (e :: SomeException))
   throwIO e
 
+
+data ExecutionException = ExecutionException [(QualifiedBinding, SomeException)]
+  deriving Typeable
+
+prettyExecutionException :: ExecutionException -> String
+prettyExecutionException (ExecutionException errors) =
+  unlines
+    [ Str.intercalate "\n  "
+      ( (e ++ " in ")
+        : map show (take cutoff opList)
+        ++ [case length opList - cutoff of
+              i | i > 0 -> "(" ++ show i ++ " more)"
+                | otherwise -> ""])
+    | (e, opSet) <- Map.toList errMap
+    , let opList = nub opSet
+    ]
+  where
+    cutoff = 5
+    errMap = Map.fromListWith (++) $ map ((displayException *** pure) . swap) errors
+
+instance Exception ExecutionException
+
+instance Show ExecutionException where
+  show = prettyExecutionException
 
 runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
 runAlgo (Algorithm nodes retVar) st = do
@@ -708,21 +736,23 @@ runAlgo (Algorithm nodes retVar) st = do
 
   let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
-  bracket
-    (mapM (customAsync . \(nt, name, inChans, retUnique :: Unique) ->
+  threads <-
+    mapM (\(nt, name, inChans, retUnique :: Unique) ->
       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
           processor =
             case nt of
               CallSf sfRef              -> runFunc sfRef stateVar
               StreamProcessor processor -> processor
-      in mountStreamProcessor name processor inChans outChans)
-      funcs)
-    ( mapM_ cancel )
-    $ \threads -> do
-        mapM_ link threads
-        UserPacket ret <- retSource
-        EndOfStreamPacket <- retSource
-        pure $ forceDynamic ret
+      in (name,) <$> async (mountStreamProcessor name processor inChans outChans))
+      funcs
+  errors <- catMaybes <$> forM threads (\(name, thread) -> either (Just . (name,)) (const Nothing) <$> waitCatch thread)
+  if null errors
+    then do
+      UserPacket ret <- retSource
+      EndOfStreamPacket <- retSource
+      pure $ forceDynamic ret
+    else throwIO $ ExecutionException errors
+
 
 
 -- Inspect the graph
