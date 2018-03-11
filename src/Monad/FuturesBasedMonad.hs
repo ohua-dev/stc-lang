@@ -20,9 +20,6 @@ module Monad.FuturesBasedMonad ( smap
                                , SFM
                                , runOhuaM
                                , OhuaM
-                               , fromS
-                               , toS
-                               , S
                                ) where
 
 import           Control.Monad
@@ -40,11 +37,10 @@ import           Data.Dynamic2
 import           Data.List               as List
 import           Data.Maybe
 import           Data.Set                as Set hiding (map)
-import           Data.Typeable
 import           Data.StateElement
 -- import           Debug.Trace
 import           GHC.Generics        (Generic)
-import           Control.DeepSeq
+-- import           Control.DeepSeq
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b

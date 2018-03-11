@@ -10,6 +10,7 @@ import Test.Framework.Providers.HUnit
 -- import Utils
 
 import Monad.FuturesBasedMonad
+import Data.StateElement
 
 foo :: Int -> StateT Int IO Int
 foo x = do

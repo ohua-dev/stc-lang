@@ -8,25 +8,26 @@ import Test.Framework.Providers.HUnit
 
 import Monad.StreamsBasedFreeMonad
 import Monad.StreamsBasedExplicitAPI
+import Data.Dynamic2
 
 import Control.Monad.State
 
-foo :: Int -> SfMonad Int Int
+foo :: Int -> StateT Int IO Int
 foo x = do
   s <- get
   put $ s+2
   return $ x+2
 
-bar :: Int -> SfMonad Int Int
+bar :: Int -> StateT Int IO Int
 bar x = do
   s <- get
   put $ s+3
   return $ x*3
 
-cons_ :: Int -> Int -> SfMonad Int [Int]
+cons_ :: Int -> Int -> StateT Int IO [Int]
 cons_ x y = return [x,y]
 
-at_ :: [Int] -> Int -> SfMonad Int Int
+at_ :: [Int] -> Int -> StateT Int IO Int
 at_ xs ith = return $ xs !! ith
 
 simpleComposition v = do
@@ -69,28 +70,28 @@ smapResultUsed v = do
 bindTest :: Assertion
 bindTest = do
   -- FIXME API not correct!
-  result <- runOhuaM (simpleComposition =<< sfConst' 10) [0,0]
+  result <- runOhuaM (simpleComposition =<< sfConst' 10) $ map toDyn [0::Int,0]
   assertEqual "result was wrong." 36 result
   -- assertEqual "state was wrong." [2,3] s
 
 pipeSMapTest :: Assertion
 pipeSMapTest = do
   -- FIXME API not correct!
-  result <- runOhuaM (simpleSMap =<< sfConst' [10,10]) [0,0,0]
+  result <- runOhuaM (simpleSMap =<< sfConst' [10,10]) $ map toDyn [0::Int,0,0]
   assertEqual "result was wrong." [36,36] result
   -- assertEqual "state was wrong." [4,6] s
 
 smapContextTest :: Assertion
 smapContextTest = do
   -- FIXME API not correct!
-  result <- runOhuaM (smapWithContext =<< sfConst' 10) [0,0,0,0,0]
+  result <- runOhuaM (smapWithContext =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0]
   assertEqual "result was wrong." [42,114] result
   -- assertEqual "state was wrong." [4,6,2,3] s
 
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
   -- FIXME API not correct!
-  result <- runOhuaM (smapResultUsed =<< sfConst' 10) [0,0,0,0,0,0,0,0,0]
+  result <- runOhuaM (smapResultUsed =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0,0,0,0,0]
   assertEqual "result was wrong." [44,342] result
   -- assertEqual "state was wrong." [4,6,2,3,2,3] s
 
