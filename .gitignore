@@ -5,3 +5,6 @@
 .stack-work/
 *.dump-simpl
 ohua-core
+*.iml
+cabal.config
+.idea

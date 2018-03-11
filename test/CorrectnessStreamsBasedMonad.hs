@@ -6,8 +6,8 @@ import Test.HUnit hiding (State)
 import Test.Framework
 import Test.Framework.Providers.HUnit
 
-import StreamsBasedFreeMonad
-import StreamsBasedExplicitAPI
+import Monad.StreamsBasedFreeMonad
+import Monad.StreamsBasedExplicitAPI
 
 import Control.Monad.State
 

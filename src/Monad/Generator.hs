@@ -16,7 +16,7 @@ import           Data.Tuple
 --
 ------------------------------------------------------------------
 
-data Generator a
+data Monad.Generator a
   = Finished
   | Yield (Generator a) a
   | NeedM (IO (Generator a))

@@ -1,6 +1,6 @@
 
 
-import           StreamsBasedFreeMonad
+import           Monad.StreamsBasedFreeMonad
 
 
 main = print =<< flip runAlgo 0 =<< algorithm

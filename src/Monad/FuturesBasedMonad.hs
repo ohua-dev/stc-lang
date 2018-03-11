@@ -12,18 +12,18 @@
 --- this implementation does not rely on channels. it builds on futures!
 
 
-module FuturesBasedMonad ( smap
-                         , case_
-                         , liftWithIndex
-                         , liftWithIndex'
-                         , SF
-                         , SFM
-                         , runOhuaM
-                         , OhuaM
-                         , fromS
-                         , toS
-                         , S
-                         ) where
+module Monad.FuturesBasedMonad ( smap
+                               , case_
+                               , liftWithIndex
+                               , liftWithIndex'
+                               , SF
+                               , SFM
+                               , runOhuaM
+                               , OhuaM
+                               , fromS
+                               , toS
+                               , S
+                               ) where
 
 import           Control.Monad
 -- import           Control.Monad.Par       as P
@@ -33,20 +33,17 @@ import           Control.Monad.State     as S
 import           Control.Arrow (first)
 --
 -- for debugging only:
--- import Scheduler as P
--- import Control.DeepSeq
+-- import Debug.Scheduler as P
 --
 -- import           Control.Parallel    (pseq)
 import           Data.Set               as Set hiding (map)
 import           Data.Maybe
 import           Data.List              as List
 import           Data.Typeable
-import           Data.Dynamic2
+import           Data.StateElement
 -- import           Debug.Trace
 import           GHC.Generics                   (Generic)
--- import           System.IO.Unsafe
 import           Control.DeepSeq
-import           StreamsBasedFreeMonad (forceDynamic)
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b
@@ -114,24 +111,6 @@ data OhuaM result = OhuaM {
 
 data GlobalState ivar = GlobalState [ivar S] [ivar S] (Set.Set Int) deriving (Generic)
 instance (NFData (ivar S)) => NFData (GlobalState ivar)
-
---
--- Support for heterogeneous lists.
---
-data S = forall a . Typeable a => S (a -> ()) Dynamic
-
-toS :: forall a . (Typeable a, NFData a) => a -> S
-toS a = S rnf' (toDyn a)
-  where
-    rnf' :: a -> ()
-    rnf' = rnf
-
-fromS :: Typeable a => S -> a
-fromS (S _ a) = forceDynamic a
-
-instance NFData S where
-  rnf :: S -> ()
-  rnf (S toRnf d) = toRnf $ forceDynamic d
 
 --
 -- shortcoming: this monad implementation is strict because bind requests the
@@ -256,8 +235,7 @@ updateState = PC.put
 getState :: (ParFuture ivar m) => ivar s -> m s
 getState = PC.get -- will wait for the value
 
-runOhuaM :: (NFData a)
-         => OhuaM a -> [S] -> IO (a,[S])
+runOhuaM :: (NFData a) => OhuaM a -> [S] -> IO (a,[S])
 runOhuaM comp initialState = PIO.runParIO $ do
   inState <- mapM PC.newFull initialState
   outState <- forM initialState $ const PC.new
