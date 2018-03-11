@@ -15,16 +15,21 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Monad.FuturesBasedMonad,
-                       Monad.StreamsBasedFreeMonad,
-                       Monad.StreamsBasedExplicitAPI
+  exposed-modules:       Monad.FuturesBasedMonad
+                       , Monad.StreamsBasedFreeMonad
+                       , Monad.StreamsBasedExplicitAPI
                        -- debugging:
                        -- Debug.Scheduler
                        -- Debug.SchedulerInternal
-  other-modules:       Data.Dynamic2,
-                       Data.DynamicUtils,
-                       Data.StateElement
-  build-depends:       base,
+  other-modules:         Data.Dynamic2,
+                       , Data.DynamicUtils
+                       , Data.StateElement
+                       , Type.Magic
+  if impl(ghc >= 8.2.0)
+    other-modules: Type.Magic.GHC8
+  else
+    other-modules: Type.Magic.OldGHC
+  build-depends:       base >= 4.7 && < 5,
                        mtl,
                        monad-par,
                        deepseq,

@@ -1,6 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude  #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE Trustworthy        #-}
+{-# LANGUAGE ExplicitForAll      #-}
+{-# LANGUAGE NoImplicitPrelude   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE Trustworthy         #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -38,7 +40,9 @@ module Data.Dynamic2
         -- * Applying functions of dynamic type
         dynApply,
         dynApp,
-        dynTypeRep
+        dynTypeRep,
+
+        forceDynamic
 
   ) where
 
@@ -141,3 +145,25 @@ dynApp f x = case dynApply f x of
 
 dynTypeRep :: Dynamic -> TypeRep
 dynTypeRep (Dynamic tr _) = tr
+
+
+
+
+data TypeCastException = TypeCastException TypeRep TypeRep
+  deriving (Typeable, Show)
+
+
+
+instance Exception TypeCastException where
+  displayException (TypeCastException expected recieved) =
+    "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
+
+
+
+-- | Coerce a dynamic to a value.
+-- If the expected type is not the one inside the 'Dynamic' it throws an error showing both types.
+forceDynamic :: forall a . Typeable a => Dynamic -> a
+forceDynamic dyn
+  | Just a <- fromDynamic dyn = a
+  | otherwise = throw $ TypeCastException rep (dynTypeRep dyn)
+  where rep = typeRep (Proxy :: Proxy a)

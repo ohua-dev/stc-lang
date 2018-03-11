@@ -19,6 +19,7 @@
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
@@ -76,9 +77,17 @@ import qualified Type.Reflection          as Refl
 import qualified Type.Reflection.Unsafe   as Refl
 #endif
 
+import           Type.Magic
+
 
 united :: Lens' s ()
 united f s = const s <$> f ()
+
+printDebugInfo :: Bool
+printDebugInfo = True
+
+debugPrint :: String -> IO ()
+debugPrint = if printDebugInfo then putStrLn else const $ pure ()
 
 -- The free monad
 
@@ -106,7 +115,7 @@ data Sf fnType
     ( ReturnType fnType ~ SfMonad state returnType
     , Typeable returnType
     , ApplyVars fnType
-    ) => Sf fnType -- reference to the actual function
+    ) => Sf fnType (Maybe QualifiedBinding) -- reference to the actual function
 
 
 -- | A way to retrieve and update local state in a larger state structure
@@ -170,7 +179,7 @@ liftSf :: ( ReturnType f ~ SfMonad state ret
           , Typeable ret
           , ApplyVars f)
        => f -> Sf f
-liftSf f = Sf f
+liftSf f = Sf f Nothing
 
 
 -- | A convenience function.
@@ -345,7 +354,9 @@ createAlgo astm = graphToAlgo dict <$> runCompiler expr
 
 registerFunction :: NodeType s -> EvalASTM s QualifiedBinding
 registerFunction n = do
-  name <- generateSFunctionName
+  name <- case n of
+            CallSf (SfRef (Sf _ (Just predefinedName)) _) -> pure predefinedName
+            _                                   -> generateSFunctionName
   EvalASTM $ _1 . at name .= Just n
   pure name
 
@@ -651,7 +662,7 @@ instance ApplyVars (SfMonad state retType) where
 runFunc :: SfRef globalState
         -> IORef globalState
         -> StreamInit ()
-runFunc (SfRef (Sf f) accessor) stTrack = pure $ do
+runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
   inVars <- recieveAllUntyped
   s <- liftIO $ readIORef stTrack
   (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
@@ -666,7 +677,7 @@ mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] ->
 mountStreamProcessor name process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
-    Left Nothing  -> pure () --putStrLn $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
+    Left Nothing  -> debugPrint $ show name ++ " finshed gracefully" -- EOS marker appeared, this is what *should* happen
     Left (Just _) -> putStrLn $ show name ++ " finished with leftover packets" --error "There were packets left over when a processor exited"
     Right ()      -> error "impossible"
   where
