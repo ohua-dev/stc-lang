@@ -77,6 +77,7 @@ import qualified Data.Set                 as Set
 import           Data.Tuple
 import           Data.Tuple.OneTuple
 import           Data.Typeable
+import qualified Data.Vector              as V
 import           Data.Void
 import           Debug.Trace
 import           Lens.Micro
@@ -394,20 +395,11 @@ dfFnRefName :: DFFnRef -> QualifiedBinding
 dfFnRefName (EmbedSf n)    = n
 dfFnRefName (DFFunction n) = n
 
-d0, d1, d2, d3, d4 :: QualifiedBinding
-d0 = QualifiedBinding ohuaLangNS "fst"
-d1 = QualifiedBinding ohuaLangNS "snd"
-d2 = QualifiedBinding ohuaLangNS "trd"
-d3 = QualifiedBinding ohuaLangNS "frth"
-d4 = QualifiedBinding ohuaLangNS "fth"
+nthNS :: NSRef
+nthNS = ["ohua", "lang", "nth"]
 
 dN :: Int -> QualifiedBinding
-dN 0 = d0
-dN 1 = d1
-dN 2 = d2
-dN 3 = d3
-dN 4 = d4
-dN _ = error "out of bounds"
+dN i = QualifiedBinding nthNS (Binding $ Str.showS i)
 
 captureSingleton :: QualifiedBinding
 captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
@@ -443,7 +435,7 @@ defaultFunctionDict = Map.fromList $
     , (DFRefs.scope, StreamProcessor $ pure $ do
           (b:vals) <- recieveAllUntyped
           if forceDynamic b
-            then sendUntyped $ lToTup vals
+            then send $ V.fromList vals
             else pure ())
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
@@ -456,16 +448,6 @@ defaultFunctionDict = Map.fromList $
           send $ length (extractList coll))
     , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= sendUntyped)
     ]
-  ++ map (dN &&& destructOp) [0..4]
-  where
-    destructOp n = StreamProcessor $ pure $ do
-      v@(Dynamic ty val) <- destructureTuple n  <$> recieveUntyped 0
-      liftIO $ (do
-                   val `seq` ty `seq` pure ()
-               ) `catch` \(ErrorCallWithLocation err loc) ->
-                           throwIO $ flip ErrorCallWithLocation loc $
-                             "Error in d" ++ show n ++ ": " ++ err
-      sendUntyped v
 
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
@@ -551,8 +533,13 @@ graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastA
   where
     buildOp G.Operator{..} = Node operatorType
                                   operatorId
-                                  (fromMaybe (error $ "cannot find " ++ show operatorType) $ Map.lookup operatorType dict)
+                                  (resolveOpType operatorType)
                                   (fromMaybe [] $ Map.lookup operatorId argDict)
+    resolveOpType opType
+      | nthNS == (qbNamespace opType) = StreamProcessor $ pure $ do
+          input <- recieve 0
+          sendUntyped $ input V.! read (Str.toString . unBinding $ qbName opType)
+      | otherwise = fromMaybe (error $ "cannot find " ++ show opType) $ Map.lookup opType dict
     opWRet = zip operators [Unique 0..]
     retDict = Map.fromList $ map (first G.operatorId) opWRet
     lastArg = fromMaybe (error "no capture op") $ lookup captureSingleton $ map (first G.operatorType) opWRet
