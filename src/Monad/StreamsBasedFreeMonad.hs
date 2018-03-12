@@ -25,7 +25,26 @@
 {-# LANGUAGE TypeSynonymInstances       #-}
 
 -- TODO define the API here by exposing it.
-module Monad.StreamsBasedFreeMonad where
+module Monad.StreamsBasedFreeMonad
+  ( -- ** Data types
+    Unique, Var, SfMonad(..), Sf(..), Accessor, ASTM, SfRef(SfRef), NodeType(..), Node(..), Algorithm(..)
+  , FunctionDict, UDict
+    -- ** helper functions
+  , liftSf, sfm, call
+    -- ** builtins
+  , smap, if_
+    -- ** Running
+  , createAlgo, defaultFunctionDict, evaluateAST, graphToAlgo, runCompiler, runAlgo
+    -- ** The stream monad
+  , Packet, Source, Sink, StreamM, createStream, StreamInit, sendPacket, abortProcessing
+  , endProcessingAt, endProcessing, expectFinish, sendEOS, recievePacket, getSource, recieveUntyped
+  , recieveAllUntyped, recieve, send, sendUntyped
+  , runFunc, mountStreamProcessor, ExecutionException(..)
+    -- ** Type level functions
+  , ReturnType, MapFnType, SetReturnType
+    -- ** Misc
+  , algorithm, stag, T, makeDestructuringExplicit, united
+  ) where
 
 
 import           Control.Monad
@@ -72,7 +91,10 @@ import           Ohua.Monad
 import           Ohua.ParseTools.Refs     (ohuaLangNS)
 import           Ohua.Types
 import           Ohua.Unit
+import           Ohua.Util
 import qualified Ohua.Util.Str            as Str
+import           Prelude                  hiding ((!!))
+import qualified Prelude                  as P
 import           System.IO                (hPutStrLn, stderr)
 import           Type.Magic
 
@@ -88,6 +110,15 @@ debugPrint = if printDebugInfo then putStrLn else const $ pure ()
 
 logError :: MonadIO m => String -> m ()
 logError = liftIO . hPutStrLn stderr
+
+(!!) :: [a] -> Int -> a
+l !! i | i < 0 = error $ "Index lower than 0 (" ++ show i ++ ")"
+       | i >= len = error $ "Index too large " ++ show i ++ " > " ++ show len ++ ")"
+       | otherwise = l P.!! i
+  where len = length l
+
+infixl 9 !!
+
 
 -- The free monad
 
@@ -281,6 +312,7 @@ data NodeType globalState
 
 data Node globalState = Node
   { nodeDescription :: QualifiedBinding
+  , nodeId          :: FnId
   , nodeType        :: NodeType globalState
   , inputRefs       :: [Unique]
   , outputRef       :: Unique
@@ -293,15 +325,6 @@ data Algorithm globalState a = Algorithm [Node globalState] Unique
 type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
 
 type UDict = Map.Map Unique Binding
-
--- | This type onlt exists to overwrite the implementation of 'Monoid' for functions.
--- It changes 'mappend' to be '(.)' which enabes me to use this Monoid in the 'EvalASTM' as
--- writer.
-newtype Mutator a = Mutator { mutAsFn :: a -> a }
-
-instance Monoid (Mutator a) where
-  mempty = Mutator id
-  Mutator m1 `mappend` Mutator m2 = Mutator $ m1 . m2
 
 newtype EvalASTM s a = EvalASTM
   { runEvalASTM :: RWS
@@ -325,9 +348,6 @@ class FreshUnique m where
 
 instance FreshUnique (EvalASTM s) where
   freshUnique = EvalASTM $ (_5 %= succ) >> use _5
-
-tellMut :: MonadWriter (Mutator a) m => (a -> a) -> m ()
-tellMut = tell . Mutator
 
 evalASTM :: EvalASTM s a -> (FunctionDict s, L.Expression -> L.Expression, a)
 evalASTM (EvalASTM ac) = (d, m, a)
@@ -414,10 +434,12 @@ defaultFunctionDict = Map.fromList $
           sequence $ replicate (pred size) $ recieveUntyped 0
           vs <- sequence $ replicate size $ recieveUntyped 1
           sendUntyped $ injectList vs)
-    , (DFRefs.oneToN, StreamProcessor $ pure $ do
-          size <- recieve 0
-          v <- recieveUntyped 1
-          sequence_ $ replicate size $ sendUntyped v)
+    , (DFRefs.oneToN, StreamProcessor $ do
+          verifyInputNum 2
+          pure $ do
+            size <- recieve 0
+            v <- recieveUntyped 1
+            sequence_ $ replicate size $ sendUntyped v)
     , (DFRefs.scope, StreamProcessor $ pure $ do
           (b:vals) <- recieveAllUntyped
           if forceDynamic b
@@ -436,7 +458,14 @@ defaultFunctionDict = Map.fromList $
     ]
   ++ map (dN &&& destructOp) [0..4]
   where
-    destructOp n = StreamProcessor $ pure $ recieveUntyped 0 >>= sendUntyped . destructureTuple n
+    destructOp n = StreamProcessor $ pure $ do
+      v@(Dynamic ty val) <- destructureTuple n  <$> recieveUntyped 0
+      liftIO $ (do
+                   val `seq` ty `seq` pure ()
+               ) `catch` \(ErrorCallWithLocation err loc) ->
+                           throwIO $ flip ErrorCallWithLocation loc $
+                             "Error in d" ++ show n ++ ": " ++ err
+      sendUntyped v
 
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
@@ -521,6 +550,7 @@ graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a
 graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastArg
   where
     buildOp G.Operator{..} = Node operatorType
+                                  operatorId
                                   (fromMaybe (error $ "cannot find " ++ show operatorType) $ Map.lookup operatorType dict)
                                   (fromMaybe [] $ Map.lookup operatorId argDict)
     opWRet = zip operators [Unique 0..]
@@ -627,6 +657,13 @@ recieveAllUntyped = StreamM (asks (length . fst)) >>= mapM recieveUntyped . enum
 recieve :: Typeable a => Int -> StreamM a
 recieve = fmap forceDynamic . recieveUntyped
 
+verifyInputNum :: Int -> StreamM ()
+verifyInputNum expected = StreamM $
+  asks (length . fst) >>= \i ->
+    if expected == i
+    then pure ()
+    else error $ "Expected " ++ show expected ++ " got " ++ show i
+
 -- TODO make this type safe at some point
 send :: Typeable a => a -> StreamM ()
 send = sendUntyped . toDyn
@@ -667,20 +704,20 @@ runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
   s <- liftIO $ readIORef stTrack
   (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
   atomicModifyIORef'_ stTrack (accessor .~ newState)
+  ret `seq` pure ()
   send ret
 
 
 -- Running the stream
 
 
-mountStreamProcessor :: QualifiedBinding -> StreamInit () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
-mountStreamProcessor name process inputs outputs = do
+mountStreamProcessor :: StreamInit () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
+mountStreamProcessor process inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
   case result of
     Left packetInfo ->
       case packetInfo of
-        Nothing ->
-          debugPrint $ show name ++ " finshed gracefully"
+        Nothing -> pure ()
           -- EOS marker appeared, this is what *should* happen
         Just _ ->
           error "There were packets left over when a processor exited"
@@ -699,7 +736,7 @@ customAsync thing = async $ thing `catch` \e -> do
   throwIO e
 
 
-data ExecutionException = ExecutionException [(QualifiedBinding, SomeException)]
+data ExecutionException = ExecutionException [(QualifiedBinding, FnId, SomeException)]
   deriving Typeable
 
 prettyExecutionException :: ExecutionException -> String
@@ -707,7 +744,7 @@ prettyExecutionException (ExecutionException errors) =
   unlines
     [ Str.intercalate "\n  "
       ( (e ++ " in ")
-        : map show (take cutoff opList)
+        : map showOp (take cutoff opList)
         ++ [case length opList - cutoff of
               i | i > 0 -> "(" ++ show i ++ " more)"
                 | otherwise -> ""])
@@ -715,8 +752,9 @@ prettyExecutionException (ExecutionException errors) =
     , let opList = nub opSet
     ]
   where
+    showOp (bnd, id_) = show bnd ++ "(" ++ show id_ ++ ")"
     cutoff = 5
-    errMap = Map.fromListWith (++) $ map ((displayException *** pure) . swap) errors
+    errMap = Map.fromListWith (++) $ map (\(bnd, id_, e) -> (show e, [(bnd, id_)])) errors
 
 instance Exception ExecutionException
 
@@ -728,10 +766,10 @@ runAlgo (Algorithm nodes retVar) st = do
   stateVar <- newIORef st
   let outputMap :: Map.Map Unique [Sink Dynamic]
       outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-      f (m, l) (Node name func inputs oUnique) = do
+      f (m, l) (Node name id_ func inputs oUnique) = do
         (sinks, sources) <- unzip <$> mapM (const createStream) inputs
         let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
-        pure (newMap, (func, name, sources, oUnique):l)
+        pure (newMap, (func, id_, name, sources, oUnique):l)
   (outMap, funcs) <- foldM f (outputMap, []) nodes
 
   (retSink, Source retSource) <- createStream
@@ -739,15 +777,16 @@ runAlgo (Algorithm nodes retVar) st = do
   let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
   threads <-
-    mapM (\(nt, name, inChans, retUnique :: Unique) ->
+    mapM (\(nt, id_, name, inChans, retUnique :: Unique) ->
       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
           processor =
             case nt of
               CallSf sfRef              -> runFunc sfRef stateVar
               StreamProcessor processor -> processor
-      in (name,) <$> async (mountStreamProcessor name processor inChans outChans))
+      in (name, id_,) <$> async (mountStreamProcessor processor inChans outChans))
       funcs
-  errors <- catMaybes <$> forM threads (\(name, thread) -> either (Just . (name,)) (const Nothing) <$> waitCatch thread)
+  errors <- catMaybes <$> forM threads (\(name, id_, thread) ->
+                                          either (Just . (name, id_,)) (const Nothing) <$> waitCatch thread)
   if null errors
     then do
       UserPacket ret <- retSource
@@ -763,12 +802,12 @@ runAlgo (Algorithm nodes retVar) st = do
 
 printGraph :: Algorithm s r -> IO ()
 printGraph (Algorithm gr ret) = do
-  forM_ gr $ \(Node name nt vars sfRet) ->
+  forM_ gr $ \(Node name id_ nt vars sfRet) ->
     let ntStr = case nt of
                     CallSf _          -> "Sf"
                     StreamProcessor _ -> "StreamProcessor"
     in
-    putStrLn $ show name ++ " " ++  ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
+    putStrLn $ show name ++ "(" ++ show id_ ++ ") " ++  ntStr ++ " with inputs " ++ show (map uniqueToInt vars) ++ " returns " ++ show (uniqueToInt sfRet)
   putStrLn $ "last return is " ++ show (uniqueToInt ret)
 
 

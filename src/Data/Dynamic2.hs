@@ -150,14 +150,13 @@ dynTypeRep (Dynamic tr _) = tr
 
 
 data TypeCastException = TypeCastException TypeRep TypeRep
-  deriving (Typeable, Show)
+  deriving Typeable
 
-
-
-instance Exception TypeCastException where
-  displayException (TypeCastException expected recieved) =
+instance Show TypeCastException where
+  show (TypeCastException expected recieved) =
     "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
 
+instance Exception TypeCastException
 
 
 -- | Coerce a dynamic to a value.
