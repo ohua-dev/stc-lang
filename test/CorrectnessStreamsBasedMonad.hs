@@ -42,7 +42,7 @@ smapWithContext v = do
   c <- return v
   r0 <- liftWithIndex 2 foo c
   r1 <- liftWithIndex 3 bar r0
-  r01 <- lift3WithIndex 4 cons_ r0 r1
+  r01 <- lift2WithIndex 4 cons_ r0 r1
   r2 <- smap simpleComposition r01
   return r2
 
@@ -50,13 +50,13 @@ smapResultUsed v = do
   c <- return v
   r0 <- liftWithIndex 2 foo c
   r1 <- liftWithIndex 3 bar r0
-  r01 <- lift3WithIndex 4 cons_ r0 r1
+  r01 <- lift2WithIndex 4 cons_ r0 r1
   r2 <- smap simpleComposition r01
-  r20 <- lift3WithIndex 5 at_ r2 =<< sfConst' 0
-  r21 <- lift3WithIndex 6 at_ r2 =<< sfConst' 1
+  r20 <- lift2WithIndex 5 at_ r2 =<< sfConst' 0
+  r21 <- lift2WithIndex 6 at_ r2 =<< sfConst' 1
   r3 <- liftWithIndex 7 foo r20
   r4 <- liftWithIndex 8 bar r21
-  lift3WithIndex 9 cons_ r3 r4
+  lift2WithIndex 9 cons_ r3 r4
 
 
 -- returnTest :: Assertion

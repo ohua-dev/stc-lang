@@ -23,6 +23,8 @@
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE TypeOperators              #-}
 {-# LANGUAGE TypeSynonymInstances       #-}
+
+-- TODO define the API here by exposing it.
 module Monad.StreamsBasedFreeMonad where
 
 
