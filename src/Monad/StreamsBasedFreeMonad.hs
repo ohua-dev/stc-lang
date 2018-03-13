@@ -30,7 +30,7 @@ module Monad.StreamsBasedFreeMonad
     Unique, Var, SfMonad(..), Sf(..), Accessor, ASTM, SfRef(SfRef), NodeType(..), Node(..), Algorithm(..)
   , FunctionDict, UDict
     -- ** helper functions
-  , liftSf, sfm, call
+  , liftSf, sfm, call, sfConst, gt
     -- ** builtins
   , smap, if_
     -- ** Running
@@ -439,7 +439,7 @@ defaultFunctionDict = Map.fromList $
             else pure ())
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
-          send (b, not b))
+          send $ V.fromList [toDyn b, toDyn $ not b])
     , (DFRefs.select, StreamProcessor $ pure $ do
           b <- recieve 0
           sendUntyped =<< recieveUntyped (if b then 1 else 2))
