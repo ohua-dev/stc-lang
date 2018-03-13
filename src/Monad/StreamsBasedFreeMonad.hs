@@ -69,7 +69,7 @@ import           Data.Dynamic2
 import           Data.Foldable            (fold)
 import           Data.IORef
 import           Data.Kind
-import           Data.List                (find, nub, sortOn)
+import           Data.List                (find, findIndex, nub, sortOn)
 import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
@@ -437,10 +437,8 @@ defaultFunctionDict = Map.fromList $
             withIsAllowed $
               sequence_ $ replicate size $ sendUntyped v)
     , (DFRefs.scope, StreamProcessor $ pure $ do
-          (b:vals) <- recieveAllUntyped
-          if forceDynamic b
-            then withIsAllowed $ send $ V.fromList vals
-            else pure ())
+          vals <- recieveAllUntyped
+          withIsAllowed $ send $ V.fromList vals)
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
           withIsAllowed $
@@ -598,7 +596,7 @@ newtype Sink a = Sink { unSink :: Packet a -> IO () }
 -- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
 -- which stops the processing.
 newtype StreamM a = StreamM
-  { runStreamM :: ExceptT (Maybe ()) (ReaderT (Maybe (Source Dynamic), [Source Dynamic], [Sink Dynamic]) IO) a
+  { runStreamM :: ExceptT (Maybe String) (ReaderT (Maybe (Source Dynamic), [Source Dynamic], [Sink Dynamic]) IO) a
   } deriving (Functor, Applicative, Monad, MonadIO)
 
 type StreamInit a = StreamM (StreamM a)
@@ -615,23 +613,36 @@ sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< view _3
 abortProcessing :: StreamM a
 abortProcessing = StreamM (throwError Nothing)
 
+packetsLeftOverErr :: String -> StreamM a
+packetsLeftOverErr = StreamM . throwError . Just
+
 -- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
 endProcessingAt :: (Int -> Bool) -> StreamM a
 endProcessingAt p = do
   numChans <- StreamM $ length <$> view _2
   vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], p x]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
-  if all isEOS vals
-    then abortProcessing
-    else
+  case findIndex (not . isEOS) vals of
+    Nothing -> abortProcessing
+    Just i ->
       -- eventually we'll want to send some information here which port had data left over in it
-      StreamM $ throwError (Just ())
+      packetsLeftOverErr (show i)
+
+withCtxArc :: StreamM a -> (Source Dynamic -> StreamM a) -> StreamM a
+withCtxArc fail succeed = StreamM (view _1) >>= maybe fail succeed
+
+closeCtxArc :: StreamM ()
+closeCtxArc = withCtxArc (pure ()) $ \arc -> do
+  ret <- recievePacket arc
+  if isEOS ret
+    then pure ()
+    else packetsLeftOverErr "ctx arc"
 
 endProcessing :: Int -> StreamM a
-endProcessing = endProcessingAt . (/=)
+endProcessing i = closeCtxArc >> endProcessingAt (/= i)
 
 expectFinish :: StreamM a
-expectFinish = endProcessingAt $ const True
+expectFinish = closeCtxArc >> endProcessingAt (const True)
 
 sendEOS :: StreamM ()
 sendEOS = sendPacket EndOfStreamPacket
@@ -644,12 +655,12 @@ getSource i = StreamM $ (!! i) <$> view _2
 
 recieveUntyped :: Int -> StreamM Dynamic
 recieveUntyped i =
-  getSource i >>= recieveSource (Just i)
+  getSource i >>= recieveSource (endProcessing i)
 
-recieveSource :: Maybe Int -> Source a -> StreamM a
-recieveSource i = recievePacket >=> \case
-    EndOfStreamPacket -> maybe expectFinish endProcessing i
-    UserPacket u      -> return u
+recieveSource :: StreamM a -> Source a -> StreamM a
+recieveSource finish = recievePacket >=> \case
+    EndOfStreamPacket -> finish
+    UserPacket u      -> pure u
 
 recieveAllUntyped :: StreamM [Dynamic]
 recieveAllUntyped = StreamM (length <$> view _2) >>= mapM recieveUntyped . enumFromTo 0 . pred
@@ -672,13 +683,10 @@ sendUntyped :: Dynamic -> StreamM ()
 sendUntyped = sendPacket . UserPacket
 
 withIsAllowed :: StreamM () -> StreamM ()
-withIsAllowed ac = do
-  ctxArc <- StreamM $ view _1
-  case ctxArc of
-    Nothing -> ac
-    Just arc -> do
-      b <- forceDynamic <$> recieveSource Nothing arc
-      when b ac
+withIsAllowed ac =
+  withCtxArc ac $ \arc -> do
+  b <- forceDynamic <$> recieveSource (endProcessingAt (const True)) arc
+  when b ac
 
 
 -- Running stateful functions as a Stream processor
@@ -729,13 +737,13 @@ mountStreamProcessor process ctxInput inputs outputs = do
       case packetInfo of
         Nothing -> pure ()
           -- EOS marker appeared, this is what *should* happen
-        Just _ ->
-          error "There were packets left over when a processor exited"
+        Just i ->
+          error $ "There were packets left over in " ++ i ++ " when a processor exited"
     Right () -> logError $ "IMPOSSIBLE: operator terminated without exception"
   where
     safeProc = do
       proc_ <- process
-      if null inputs
+      if null inputs && isNothing ctxInput
         then proc_ >> expectFinish
         else forever proc_
 

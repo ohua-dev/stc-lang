@@ -3,24 +3,64 @@ import           Test.Framework
 
 import           CorrectnessFuturesBasedMonad   as FBM
 import           CorrectnessStreamsBasedMonad   as SBM
+import           Data.Typeable
+import           Monad.StreamsBasedExplicitAPI
 import           Monad.StreamsBasedFreeMonad
 import           Test.Framework.Providers.HUnit
-import           Test.HUnit
+import           Test.HUnit                     hiding (Test)
 
 main :: IO ()
 main =
   flip defaultMainWithOpts mempty $
   FBM.testSuite
   ++ SBM.testSuite
-  ++ [ testCase "using if" $ do
-         let a = do
-               four <- sfConst (4 :: Int)
-               five <- sfConst 5
-               isGreater <- (four `gt` five)
-               if_ isGreater
-                 (sfConst True)
-                 (sfConst False)
-         result <- flip runAlgo () =<< createAlgo a
-         assertEqual "If selected incorrect branch" result False
-     ]
+  ++
+  [ basicRuntimeTests ]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
+
+simpleLift f = call (liftSf $ sfm . pure . f) united
+simpleLift2 f = call (liftSf $ \a b -> sfm $ pure $ f a b) united
+
+basicRuntimeTests :: Test
+basicRuntimeTests = testGroup "Runtime Tests"
+  [ testCase "using if" $ do
+      let a = do
+            four <- sfConst (4 :: Int)
+            five <- sfConst 5
+            isGreater <- (four `gt` five)
+            if_ isGreater
+              (sfConst True)
+              (sfConst False)
+      result <- runOhuaM a ()
+      assertEqual "If selected incorrect branch" result False
+  , testCase "if in smap" $ do
+      let p :: Int -> Bool
+          p x = (x `mod` 2) == 0
+          f = (* 2)
+          l = [0..20] :: [Int]
+      let a = do
+            l' <- sfConst l
+
+            test <- sfConst p
+            flip smap l' $ \val -> do
+              cond <- simpleLift2 ($) test val
+              if_ cond
+                (simpleLift f val)
+                (pure val)
+      result <- runOhuaM a ()
+
+      assertEqual "Result was not correct" result (map (\x -> if p x
+                                                              then f x
+                                                              else x) l)
+  , testCase "if in smap with env only branch" $ do
+      result <- flip runOhuaM () $ do
+        --v <- sfConst 8
+        l <- sfConst [0..30]
+        flip smap l $ \i -> do
+          cond <- simpleLift (\i -> i `mod` 3 == 0) i
+          if_ cond
+            (pure i)
+            (sfConst 8)
+      assertEqual "" result [if x `mod` 3 == 0 then x else 8 | x <- [0..30 ::Int]]
+  ]
+
