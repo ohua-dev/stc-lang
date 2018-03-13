@@ -315,6 +315,7 @@ data Node globalState = Node
   { nodeDescription :: QualifiedBinding
   , nodeId          :: FnId
   , nodeType        :: NodeType globalState
+  , ctxRef          :: Maybe Unique
   , inputRefs       :: [Unique]
   , outputRef       :: Unique
   }
@@ -413,9 +414,10 @@ defaultFunctionDict = Map.fromList $
           stateVar <- liftIO $ newIORef []
           pure $ do
             l <- recieveUntyped 0
-            sendUntyped =<<
-              liftIO (atomicModifyIORef' stateVar
-                      $ \case
+            withIsAllowed $
+              sendUntyped =<<
+                liftIO (atomicModifyIORef' stateVar
+                        $ \case
                            [] -> case extractList l of
                                    []     -> error "new input list was empty"
                                    (x:xs) -> (xs, x)
@@ -423,30 +425,35 @@ defaultFunctionDict = Map.fromList $
       )
     , (DFRefs.collect, StreamProcessor $ pure $ do
           size <- recieve 0
-          sequence $ replicate (pred size) $ recieveUntyped 0
-          vs <- sequence $ replicate size $ recieveUntyped 1
-          sendUntyped $ injectList vs)
+          withIsAllowed $ do
+            sequence $ replicate (pred size) $ recieveUntyped 0
+            vs <- sequence $ replicate size $ recieveUntyped 1
+            sendUntyped $ injectList vs)
     , (DFRefs.oneToN, StreamProcessor $ do
           verifyInputNum 2
           pure $ do
             size <- recieve 0
             v <- recieveUntyped 1
-            sequence_ $ replicate size $ sendUntyped v)
+            withIsAllowed $
+              sequence_ $ replicate size $ sendUntyped v)
     , (DFRefs.scope, StreamProcessor $ pure $ do
           (b:vals) <- recieveAllUntyped
           if forceDynamic b
-            then send $ V.fromList vals
+            then withIsAllowed $ send $ V.fromList vals
             else pure ())
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
-          send $ V.fromList [toDyn b, toDyn $ not b])
+          withIsAllowed $
+            send $ V.fromList [toDyn b, toDyn $ not b])
     , (DFRefs.select, StreamProcessor $ pure $ do
           b <- recieve 0
-          sendUntyped =<< recieveUntyped (if b then 1 else 2))
+          withIsAllowed $
+            sendUntyped =<< recieveUntyped (if b then 1 else 2))
     , (DFRefs.size, StreamProcessor $ pure $ do
           coll <- recieveUntyped 0
-          send $ length (extractList coll))
-    , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= sendUntyped)
+          withIsAllowed $
+            send $ length (extractList coll))
+    , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= withIsAllowed . sendUntyped)
     ]
 
 
@@ -534,7 +541,9 @@ graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastA
     buildOp G.Operator{..} = Node operatorType
                                   operatorId
                                   (resolveOpType operatorType)
-                                  (fromMaybe [] $ Map.lookup operatorId argDict)
+                                  ctxArc
+                                  args
+      where (ctxArc, args) = (fromMaybe (Nothing, []) $ Map.lookup operatorId argDict)
     resolveOpType opType
       | nthNS == (qbNamespace opType) = StreamProcessor $ pure $ do
           input <- recieve 0
@@ -545,7 +554,8 @@ graphToAlgo dict G.OutGraph{..} = Algorithm (map (uncurry buildOp) opWRet) lastA
     lastArg = fromMaybe (error "no capture op") $ lookup captureSingleton $ map (first G.operatorType) opWRet
     -- The `sortOn` here is dangerous. it relies on there being *exactly one* input present for every
     -- argument to the function. If that invariant is broken we will not detect it here but get runtime errors
-    argDict = fmap (map snd . sortOn fst) $ Map.fromListWith (++) $ map arcToUnique arcs
+    argDict = fmap partitionArgs $ Map.fromListWith (++) $ map arcToUnique arcs
+    partitionArgs l = (snd <$> find ((== -1) . fst) l, map snd $ sortOn fst $ filter ((/= -1) . fst) l)
     arcToUnique G.Arc{G.target=G.Target{G.operator, G.index=tindex}, source=src}
       = ( operator
         , case src of
@@ -588,7 +598,7 @@ newtype Sink a = Sink { unSink :: Packet a -> IO () }
 -- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
 -- which stops the processing.
 newtype StreamM a = StreamM
-  { runStreamM :: ExceptT (Maybe ()) (ReaderT ([Source Dynamic], [Sink Dynamic]) IO) a
+  { runStreamM :: ExceptT (Maybe ()) (ReaderT (Maybe (Source Dynamic), [Source Dynamic], [Sink Dynamic]) IO) a
   } deriving (Functor, Applicative, Monad, MonadIO)
 
 type StreamInit a = StreamM (StreamM a)
@@ -599,7 +609,7 @@ createStream = (Sink . writeChan &&& Source . readChan) <$> newChan
 
 -- | Send a packet to all output streams
 sendPacket :: Packet Dynamic -> StreamM ()
-sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< asks snd
+sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< view _3
 
 -- | Stop processing immediately. No subsequent actions are performed.
 abortProcessing :: StreamM a
@@ -608,7 +618,7 @@ abortProcessing = StreamM (throwError Nothing)
 -- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
 endProcessingAt :: (Int -> Bool) -> StreamM a
 endProcessingAt p = do
-  numChans <- StreamM $ asks (length . fst)
+  numChans <- StreamM $ length <$> view _2
   vals <- mapM (recievePacket <=< getSource) [x | x <- [0..numChans - 1], p x]
   sendEOS -- make sure the error of having excess input does not propagate unnecessarily
   if all isEOS vals
@@ -630,23 +640,26 @@ recievePacket :: Source a -> StreamM (Packet a)
 recievePacket = StreamM . liftIO . unSource
 
 getSource :: Int -> StreamM (Source Dynamic)
-getSource i = StreamM $ asks $ (!! i) . fst
+getSource i = StreamM $ (!! i) <$> view _2
 
 recieveUntyped :: Int -> StreamM Dynamic
 recieveUntyped i =
-  getSource i >>= recievePacket >>= \case
-    EndOfStreamPacket -> endProcessing i
+  getSource i >>= recieveSource (Just i)
+
+recieveSource :: Maybe Int -> Source a -> StreamM a
+recieveSource i = recievePacket >=> \case
+    EndOfStreamPacket -> maybe expectFinish endProcessing i
     UserPacket u      -> return u
 
 recieveAllUntyped :: StreamM [Dynamic]
-recieveAllUntyped = StreamM (asks (length . fst)) >>= mapM recieveUntyped . enumFromTo 0 . pred
+recieveAllUntyped = StreamM (length <$> view _2) >>= mapM recieveUntyped . enumFromTo 0 . pred
 
 recieve :: Typeable a => Int -> StreamM a
 recieve = fmap forceDynamic . recieveUntyped
 
 verifyInputNum :: Int -> StreamM ()
 verifyInputNum expected = StreamM $
-  asks (length . fst) >>= \i ->
+  (length <$> view _2) >>= \i ->
     if expected == i
     then pure ()
     else error $ "Expected " ++ show expected ++ " got " ++ show i
@@ -657,6 +670,15 @@ send = sendUntyped . toDyn
 
 sendUntyped :: Dynamic -> StreamM ()
 sendUntyped = sendPacket . UserPacket
+
+withIsAllowed :: StreamM () -> StreamM ()
+withIsAllowed ac = do
+  ctxArc <- StreamM $ view _1
+  case ctxArc of
+    Nothing -> ac
+    Just arc -> do
+      b <- forceDynamic <$> recieveSource Nothing arc
+      when b ac
 
 
 -- Running stateful functions as a Stream processor
@@ -688,19 +710,20 @@ runFunc :: SfRef globalState
         -> StreamInit ()
 runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
   inVars <- recieveAllUntyped
-  s <- liftIO $ readIORef stTrack
-  (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
-  atomicModifyIORef'_ stTrack (accessor .~ newState)
-  ret `seq` pure ()
-  send ret
+  withIsAllowed $ do
+    s <- liftIO $ readIORef stTrack
+    (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
+    atomicModifyIORef'_ stTrack (accessor .~ newState)
+    ret `seq` pure ()
+    send ret
 
 
 -- Running the stream
 
 
-mountStreamProcessor :: StreamInit () -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
-mountStreamProcessor process inputs outputs = do
-  result <- runReaderT (runExceptT $ runStreamM safeProc) (inputs, outputs)
+mountStreamProcessor :: StreamInit () -> Maybe (Source Dynamic) -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
+mountStreamProcessor process ctxInput inputs outputs = do
+  result <- runReaderT (runExceptT $ runStreamM safeProc) (ctxInput, inputs, outputs)
   case result of
     Left packetInfo ->
       case packetInfo of
@@ -753,10 +776,16 @@ runAlgo (Algorithm nodes retVar) st = do
   stateVar <- newIORef st
   let outputMap :: Map.Map Unique [Sink Dynamic]
       outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-      f (m, l) (Node name id_ func inputs oUnique) = do
+      f (m, l) (Node name id_ func ctxInput inputs oUnique) = do
         (sinks, sources) <- unzip <$> mapM (const createStream) inputs
         let newMap = foldl (\m (u, chan) -> Map.update (Just . (chan:)) u m) m (zip inputs sinks)
-        pure (newMap, (func, id_, name, sources, oUnique):l)
+        (newMap', ctxArc) <-
+          case ctxInput of
+            Just src -> do
+              (sink, source) <- createStream
+              pure (Map.update (Just . (sink:)) src newMap, Just source)
+            Nothing -> pure (newMap, Nothing)
+        pure (newMap', (func, id_, name, ctxArc, sources, oUnique):l)
   (outMap, funcs) <- foldM f (outputMap, []) nodes
 
   (retSink, Source retSource) <- createStream
@@ -764,13 +793,13 @@ runAlgo (Algorithm nodes retVar) st = do
   let finalMap = Map.update (Just . (retSink:)) retVar outMap
 
   threads <-
-    mapM (\(nt, id_, name, inChans, retUnique :: Unique) ->
+    mapM (\(nt, id_, name, ctxArc, inChans, retUnique :: Unique) ->
       let outChans = fromMaybe (error "return value not found") $ Map.lookup retUnique finalMap
           processor =
             case nt of
               CallSf sfRef              -> runFunc sfRef stateVar
               StreamProcessor processor -> processor
-      in (name, id_,) <$> async (mountStreamProcessor processor inChans outChans))
+      in (name, id_,) <$> async (mountStreamProcessor processor ctxArc inChans outChans))
       funcs
   errors <- catMaybes <$> forM threads (\(name, id_, thread) ->
                                           either (Just . (name, id_,)) (const Nothing) <$> waitCatch thread)
@@ -789,7 +818,7 @@ runAlgo (Algorithm nodes retVar) st = do
 
 printGraph :: Algorithm s r -> IO ()
 printGraph (Algorithm gr ret) = do
-  forM_ gr $ \(Node name id_ nt vars sfRet) ->
+  forM_ gr $ \(Node name id_ nt _ vars sfRet) ->
     let ntStr = case nt of
                     CallSf _          -> "Sf"
                     StreamProcessor _ -> "StreamProcessor"
