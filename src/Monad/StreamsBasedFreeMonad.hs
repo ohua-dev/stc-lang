@@ -77,6 +77,7 @@ import qualified Data.Set                 as Set
 import           Data.Tuple
 import           Data.Tuple.OneTuple
 import           Data.Typeable
+import           Data.Vector              (Vector)
 import qualified Data.Vector              as V
 import           Data.Void
 import           Debug.Trace
@@ -438,7 +439,7 @@ defaultFunctionDict = Map.fromList $
               sequence_ $ replicate size $ sendUntyped v)
     , (DFRefs.scope, StreamProcessor $ pure $ do
           vals <- recieveAllUntyped
-          withIsAllowed $ send $ V.fromList vals)
+          withIsAllowed $ send vals)
     , (DFRefs.bool, StreamProcessor $ pure $ do
           b <- recieve 0
           withIsAllowed $
@@ -596,7 +597,9 @@ newtype Sink a = Sink { unSink :: Packet a -> IO () }
 -- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
 -- which stops the processing.
 newtype StreamM a = StreamM
-  { runStreamM :: ExceptT (Maybe String) (ReaderT (Maybe (Source Dynamic), [Source Dynamic], [Sink Dynamic]) IO) a
+  { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Source Dynamic)
+                                                  , Vector (Source Dynamic)
+                                                  , Vector (Sink Dynamic)) IO) a
   } deriving (Functor, Applicative, Monad, MonadIO)
 
 type StreamInit a = StreamM (StreamM a)
@@ -651,7 +654,7 @@ recievePacket :: Source a -> StreamM (Packet a)
 recievePacket = StreamM . liftIO . unSource
 
 getSource :: Int -> StreamM (Source Dynamic)
-getSource i = StreamM $ (!! i) <$> view _2
+getSource i = StreamM $ (V.! i) <$> view _2
 
 recieveUntyped :: Int -> StreamM Dynamic
 recieveUntyped i =
@@ -662,8 +665,13 @@ recieveSource finish = recievePacket >=> \case
     EndOfStreamPacket -> finish
     UserPacket u      -> pure u
 
-recieveAllUntyped :: StreamM [Dynamic]
-recieveAllUntyped = StreamM (length <$> view _2) >>= mapM recieveUntyped . enumFromTo 0 . pred
+recieveAllUntyped :: StreamM (Vector Dynamic)
+recieveAllUntyped = do
+  sources <- StreamM (view _2)
+  V.imapM (\i s -> recieveSource (endProcessing i) s) sources
+
+recieveAll :: Typeable a => StreamM (Vector a)
+recieveAll = fmap forceDynamic <$> recieveAllUntyped
 
 recieve :: Typeable a => Int -> StreamM a
 recieve = fmap forceDynamic . recieveUntyped
@@ -720,7 +728,7 @@ runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
   inVars <- recieveAllUntyped
   withIsAllowed $ do
     s <- liftIO $ readIORef stTrack
-    (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f inVars)) (s ^. accessor)
+    (ret, newState) <- liftIO $ runStateT (runSfMonad (applyVars f $ V.toList inVars)) (s ^. accessor)
     atomicModifyIORef'_ stTrack (accessor .~ newState)
     ret `seq` pure ()
     send ret
@@ -729,7 +737,11 @@ runFunc (SfRef (Sf f _) accessor) stTrack = pure $ do
 -- Running the stream
 
 
-mountStreamProcessor :: StreamInit () -> Maybe (Source Dynamic) -> [Source Dynamic] -> [Sink Dynamic] -> IO ()
+mountStreamProcessor :: StreamInit ()
+                     -> Maybe (Source Dynamic)
+                     -> Vector (Source Dynamic)
+                     -> Vector (Sink Dynamic)
+                     -> IO ()
 mountStreamProcessor process ctxInput inputs outputs = do
   result <- runReaderT (runExceptT $ runStreamM safeProc) (ctxInput, inputs, outputs)
   case result of
@@ -807,7 +819,7 @@ runAlgo (Algorithm nodes retVar) st = do
             case nt of
               CallSf sfRef              -> runFunc sfRef stateVar
               StreamProcessor processor -> processor
-      in (name, id_,) <$> async (mountStreamProcessor processor ctxArc inChans outChans))
+      in (name, id_,) <$> async (mountStreamProcessor processor ctxArc (V.fromList inChans) (V.fromList outChans)))
       funcs
   errors <- catMaybes <$> forM threads (\(name, id_, thread) ->
                                           either (Just . (name, id_,)) (const Nothing) <$> waitCatch thread)
