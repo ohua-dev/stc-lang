@@ -39,7 +39,7 @@ import           Data.Maybe
 import           Data.Set                as Set hiding (map)
 import           Data.StateElement
 -- import           Debug.Trace
-import           GHC.Generics        (Generic)
+import           GHC.Generics            (Generic)
 -- import           Control.DeepSeq
 
 -- type SFM s b = State s b

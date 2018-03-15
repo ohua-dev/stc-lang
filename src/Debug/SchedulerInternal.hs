@@ -1,5 +1,8 @@
-{-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
-             ExistentialQuantification, CPP #-}
+{-# LANGUAGE BangPatterns              #-}
+{-# LANGUAGE CPP                       #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE NamedFieldPuns            #-}
+{-# LANGUAGE RankNTypes                #-}
 {-# OPTIONS_GHC -Wall -fno-warn-name-shadowing -fno-warn-unused-do-bind #-}
 
 -- | This module exposes the internals of the @Par@ monad so that you
@@ -19,21 +22,21 @@ module SchedulerInternal (
  ) where
 
 
-import Control.Monad as M hiding (mapM, sequence, join)
-import Prelude hiding (mapM, sequence, head,tail)
-import Data.IORef
-import System.IO.Unsafe
-import Control.Concurrent hiding (yield)
-import GHC.Conc (numCapabilities)
-import Control.DeepSeq
-import Text.Printf
+import           Control.Concurrent  hiding (yield)
+import           Control.DeepSeq
+import           Control.Monad       as M hiding (join, mapM, sequence)
+import           Data.IORef
+import           GHC.Conc            (numCapabilities)
+import           Prelude             hiding (head, mapM, sequence, tail)
+import           System.IO.Unsafe
+import           Text.Printf
 
 #if !MIN_VERSION_base(4,8,0)
-import Control.Applicative
+import           Control.Applicative
 #endif
 
 #if __GLASGOW_HASKELL__ <= 700
-import GHC.Conc (forkOnIO)
+import           GHC.Conc            (forkOnIO)
 forkOn = forkOnIO
 #endif
 
@@ -64,15 +67,15 @@ sched _doSync queue t = loop t
          Full a -> loop (c a)
          _other -> do
            r <- atomicModifyIORef v $ \e -> case e of
-                        Empty    -> (Blocked [c], reschedule queue)
-                        Full a   -> (Full a,      loop (c a))
+                        Empty      -> (Blocked [c], reschedule queue)
+                        Full a     -> (Full a,      loop (c a))
                         Blocked cs -> (Blocked (c:cs), reschedule queue)
            r
     Put (IVar v) a t  -> do
       printf "cpu %d received PUT\n" $ no queue
       cs <- atomicModifyIORef v $ \e -> case e of
-               Empty    -> (Full a, [])
-               Full _   -> error "multiple put"
+               Empty      -> (Full a, [])
+               Full _     -> error "multiple put"
                Blocked cs -> (Full a, cs)
       printf "cpu %d pushing work into queue\n" $ no queue
       mapM_ (pushWork queue. ($a)) cs
@@ -164,7 +167,7 @@ pushWork Sched { workpool, idle } t = do
   idles <- readIORef idle
   when (not (null idles)) $ do
     r <- atomicModifyIORef idle (\is -> case is of
-                                          [] -> ([], return ())
+                                          []     -> ([], return ())
                                           (i:is) -> (is, putMVar i False))
     r -- wake one up
 
@@ -256,7 +259,7 @@ runPar_internal _doSync x = do
    r <- takeMVar m
    case r of
      Full a -> return a
-     _ -> error "no result"
+     _      -> error "no result"
 
 
 -- | Run a parallel, deterministic computation and return its result.

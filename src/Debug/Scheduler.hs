@@ -1,8 +1,11 @@
-{-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
-             ExistentialQuantification, MultiParamTypeClasses, CPP #-}
+{-# LANGUAGE CPP                       #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
+{-# LANGUAGE NamedFieldPuns            #-}
+{-# LANGUAGE RankNTypes                #-}
 {- OPTIONS_GHC -Wall -fno-warn-name-shadowing -fwarn-unused-imports -}
 
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilies              #-}
 
 {- | This is the scheduler described in the paper "A Monad for
      Deterministic Parallelism".  It is based on a lazy @Trace@ data
@@ -18,16 +21,16 @@ module Scheduler (
     spawn, spawn_, spawnP
   ) where
 
-import qualified Control.Monad.Par.Class as PC
+import qualified Control.Monad.Par.Class  as PC
 -- import Control.Monad.Par.Scheds.TraceInternal
-import SchedulerInternal
-import Control.DeepSeq
-import Control.Monad as M hiding (mapM, sequence, join)
-import Prelude hiding (mapM, sequence, head,tail)
+import           Control.DeepSeq
+import           Control.Monad            as M hiding (join, mapM, sequence)
+import           Prelude                  hiding (head, mapM, sequence, tail)
+import           SchedulerInternal
 
 #ifdef NEW_GENERIC
-import qualified       Control.Par.Class as PN
-import qualified       Control.Par.Class.Unsafe as PU
+import qualified Control.Par.Class        as PN
+import qualified Control.Par.Class.Unsafe as PU
 #endif
 
 -- -----------------------------------------------------------------------------

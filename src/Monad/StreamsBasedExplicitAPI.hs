@@ -1,13 +1,13 @@
-{-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE ExplicitForAll             #-}
+{-# LANGUAGE ExplicitForAll      #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Monad.StreamsBasedExplicitAPI where
 
-import           Monad.StreamsBasedFreeMonad
 import           Control.Monad.State
-import           Lens.Micro
-import           Data.Typeable
 import           Data.Dynamic2
+import           Data.Typeable
+import           Lens.Micro
+import           Monad.StreamsBasedFreeMonad
 
 
 -- maps the StreamsBasedFreeMonad implementation to the explicit API.

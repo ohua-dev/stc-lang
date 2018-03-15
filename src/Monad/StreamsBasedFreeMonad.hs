@@ -457,7 +457,7 @@ defaultFunctionDict = Map.fromList $
           pure $ do
             recieveUntyped 0
             withIsAllowed $ send True)
-          
+
     , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= withIsAllowed . sendUntyped)
     ]
 
