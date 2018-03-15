@@ -30,7 +30,7 @@ injectList [] = error "Cannot convert empty list yet"
 injectList l@(Dynamic (SomeTypeRep tra) _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
   where
     unwrap (Dynamic _ v) = v
-    tr = traceShowId $ SomeTypeRep $ App (typeRep @[]) tra'
+    tr = SomeTypeRep $ App (typeRep @[]) tra'
     tra' = case typeRepKind tra `eqTypeRep` typeRep @Type of
              Just HRefl -> unsafeCoerce tra
              Nothing    -> error "kinds do not match"
