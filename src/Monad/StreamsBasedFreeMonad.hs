@@ -38,8 +38,8 @@ module Monad.StreamsBasedFreeMonad
     -- ** The stream monad
   , Packet, Source, Sink, StreamM, createStream, StreamInit, sendPacket, abortProcessing
   , endProcessingAt, endProcessing, expectFinish, sendEOS, recievePacket, getSource, recieveUntyped
-  , recieveAllUntyped, recieve, send, sendUntyped
-  , runFunc, mountStreamProcessor, ExecutionException(..)
+  , recieveAllUntyped, recieve, send, sendUntyped, recieveAll
+  , runFunc, mountStreamProcessor, ExecutionException(..), withIsAllowed
     -- ** Type level functions
   , ReturnType, MapFnType, SetReturnType
     -- ** Misc
@@ -452,6 +452,12 @@ defaultFunctionDict = Map.fromList $
           coll <- recieveUntyped 0
           withIsAllowed $
             send $ length (extractList coll))
+    , (DFRefs.seq, StreamProcessor $ do
+          verifyInputNum 1
+          pure $ do
+            recieveUntyped 0
+            withIsAllowed $ send True)
+          
     , (DFRefs.id, StreamProcessor $ pure $ recieveUntyped 0 >>= withIsAllowed . sendUntyped)
     ]
 
