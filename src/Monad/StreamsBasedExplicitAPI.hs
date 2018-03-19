@@ -16,7 +16,8 @@ sfConst' :: Typeable a => a -> ASTM s (Var a)
 sfConst' a = call (liftSf (sfm $ pure a)) stag
 
 arrayAccess gsIdx = lens (forceDynamic . (!! gsIdx))
-                         (\s n -> let (xs, _:ys) = splitAt (gsIdx-1) s in xs ++ [toDyn n] ++ ys)
+                         (\s n -> case splitAt gsIdx s of
+                                      (xs, _:ys) -> xs ++ [toDyn n] ++ ys)
 
 liftWithIndex :: forall s a b.(Typeable a, Typeable b, Typeable s)
               => Int -> (a -> StateT s IO b) -> Var a -> ASTM [Dynamic] (Var b)

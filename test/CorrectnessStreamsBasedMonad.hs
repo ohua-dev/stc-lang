@@ -91,7 +91,7 @@ smapContextTest = do
 smapResultUsedTest :: Assertion
 smapResultUsedTest = do
   -- FIXME API not correct!
-  result <- runOhuaM (smapResultUsed =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0,0,0,0,0]
+  result <- runOhuaM (smapResultUsed =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0,0,0,0,0,0]
   assertEqual "result was wrong." [44,342] result
   -- assertEqual "state was wrong." [4,6,2,3,2,3] s
 
