@@ -93,6 +93,7 @@ module Monad.StreamsBasedFreeMonad
     , T
     , makeDestructuringExplicit
     , united
+    , printGraph
     ) where
 
 import Control.Monad
@@ -375,13 +376,13 @@ type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
 
 type UDict = Map.Map Unique Binding
 
-newtype EvalASTM s a = EvalASTM
-    { runEvalASTM :: RWS () (Mutator L.Expression) ( FunctionDict s
-                                                   , UDict
-                                                   , NameGenerator
-                                                   , NameGenerator
-                                                   , Unique) a
-    } deriving (Functor, Applicative, Monad, MonadWriter (Mutator L.Expression))
+newtype EvalASTM s a =
+    EvalASTM (RWS () (Mutator L.Expression) ( FunctionDict s
+                                            , UDict
+                                            , NameGenerator
+                                            , NameGenerator
+                                            , Unique) a)
+    deriving (Functor, Applicative, Monad, MonadWriter (Mutator L.Expression))
 
 class FreshUnique m where
     freshUnique :: m Unique
@@ -475,7 +476,7 @@ defaultFunctionDict =
             pure $ do
                 size <- recieve 0
                 withIsAllowed $ do
-                    sequence $ replicate (pred size) $ recieveUntyped 0
+                    void $ sequence $ replicate (pred size) $ recieveUntyped 0
                     vs <- sequence $ replicate size $ recieveUntyped 1
                     sendUntyped $ injectList vs)
         , ( DFRefs.oneToN
@@ -514,7 +515,7 @@ defaultFunctionDict =
           , StreamProcessor $ do
                 verifyInputNum 1
                 pure $ do
-                    recieveUntyped 0
+                    void $ recieveUntyped 0
                     withIsAllowed $ send True)
         , ( DFRefs.id
           , StreamProcessor $
@@ -558,8 +559,8 @@ evaluateAST (ASTM m) = (dict, build e)
   where
     evalInner :: ASTM s (Var a) -> EvalASTM s L.Expression
     evalInner (ASTM inner) = do
-        (e, Mutator build) <- censor (const mempty) $ listen $ iterM go inner
-        build . L.Var . L.Local <$> varToBnd e
+        (e', Mutator build') <- censor (const mempty) $ listen $ iterM go inner
+        build' . L.Var . L.Local <$> varToBnd e'
     (dict, build, e) =
         evalASTM $ do
             v <- iterM go m
@@ -580,16 +581,16 @@ evaluateAST (ASTM m) = (dict, build e)
                           then [unitExpr]
                           else map (L.Var . L.Local) vars'))
         cont rv
-    go (SmapLike (FunctorTaggedBinding refToCall) (innerCont :: Var inputType -> ASTM globalState (Var returnType)) inputVar cont) = do
+    go (SmapLike (FunctorTaggedBinding refToCall) innerCont inputVar cont) = do
         (innerContVar, innerContBnd) <- mkRegVar
-        e <- evalInner $ innerCont innerContVar
+        e' <- evalInner $ innerCont innerContVar
         inpBnd <- varToBnd inputVar
         (smapResVar, smapResBnd) <- mkRegVar
         tellMut $
             L.Let
                 (Direct smapResBnd)
                 (L.Var (L.Sf refToCall Nothing) `L.Apply`
-                 L.Lambda (Direct innerContBnd) e `L.Apply`
+                 L.Lambda (Direct innerContBnd) e' `L.Apply`
                  L.Var (L.Local inpBnd))
         cont smapResVar
     go (If v then_ else_ cont) = do
@@ -624,7 +625,7 @@ makeDestructuringExplicit G.OutGraph {G.operators, G.arcs, G.returnArc} =
   where
     (ops', arcs') = fold $ runGenIdM (mapM go arcs) largestId
     largestId = maximum (map G.operatorId operators)
-    go a@G.Arc {G.source, G.target} =
+    go a@G.Arc {G.source} =
         case source of
             G.LocalSource t@G.Target {G.index = i}
                 | i == -1 -> pure (mempty, pure a)
@@ -682,10 +683,10 @@ graphToAlgo dict G.OutGraph {..} =
                       } =
         ( operator
         , case src of
-              G.LocalSource G.Target {..}
+              G.LocalSource G.Target {G.index, G.operator = srcOp}
                   | index /= -1 ->
                       error "invariant broken, destructuring not permitted yet"
-                  | otherwise -> pure (tindex, retDict ! operator)
+                  | otherwise -> pure (tindex, retDict ! srcOp)
               _ -> error "invariant broken, we dont have env args")
 
 runCompiler :: L.Expression -> IO G.OutGraph
@@ -757,7 +758,8 @@ endProcessingAt p = do
          -> packetsLeftOverErr (show i)
 
 withCtxArc :: StreamM a -> (Source Dynamic -> StreamM a) -> StreamM a
-withCtxArc fail succeed = StreamM (view _1) >>= maybe fail succeed
+withCtxArc failAction succeedAction =
+    StreamM (view _1) >>= maybe failAction succeedAction
 
 closeCtxArc :: StreamM ()
 closeCtxArc =
@@ -887,12 +889,6 @@ mountStreamProcessor process ctxInput inputs outputs = do
             then proc_ >> expectFinish
             else forever proc_
 
-customAsync :: IO a -> IO (Async a)
-customAsync thing =
-    async $ thing `catch` \e -> do
-        putStrLn (displayException (e :: SomeException))
-        throwIO e
-
 data ExecutionException =
     ExecutionException [(QualifiedBinding, FnId, SomeException)]
     deriving (Typeable)
@@ -902,8 +898,9 @@ prettyExecutionException (ExecutionException errors) =
     unlines
         [ Str.intercalate
             "\n  "
-            ((e ++ " in ") : map showOp (take cutoff opList) ++
-             [ case length opList - cutoff of
+            ((e ++ " in ") :
+             map showOp (take maxNumExceptionSources opList) ++
+             [ case length opList - maxNumExceptionSources of
                    i
                        | i > 0 -> "(" ++ show i ++ " more)"
                        | otherwise -> ""
@@ -913,7 +910,7 @@ prettyExecutionException (ExecutionException errors) =
         ]
   where
     showOp (bnd, id_) = show bnd ++ "(" ++ show id_ ++ ")"
-    cutoff = 5
+    maxNumExceptionSources = 5
     errMap =
         Map.fromListWith (++) $
         map (\(bnd, id_, e) -> (show e, [(bnd, id_)])) errors
@@ -932,7 +929,7 @@ runAlgo (Algorithm nodes retVar) st = do
             (sinks, sources) <- unzip <$> mapM (const createStream) inputs
             let newMap =
                     foldl
-                        (\m (u, chan) -> Map.update (Just . (chan :)) u m)
+                        (\theMap (u, chan) -> Map.update (Just . (chan :)) u theMap)
                         m
                         (zip inputs sinks)
             (newMap', ctxArc) <-
@@ -956,7 +953,7 @@ runAlgo (Algorithm nodes retVar) st = do
                      processor =
                          case nt of
                              CallSf sfRef -> runFunc sfRef stateVar
-                             StreamProcessor processor -> processor
+                             StreamProcessor processor' -> processor'
                   in (name, id_, ) <$>
                      async
                          (mountStreamProcessor
