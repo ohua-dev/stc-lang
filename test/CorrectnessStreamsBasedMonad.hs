@@ -95,11 +95,13 @@ smapResultUsedTest = do
   assertEqual "result was wrong." [44,342] result
   -- assertEqual "state was wrong." [4,6,2,3,2,3] s
 
-testSuite :: [Test.Framework.Test]
-testSuite = [
+testSuite :: Test.Framework.Test
+testSuite =
+    testGroup
+        "Streams"
               -- testCase "Streams: checking monadic return" returnTest
-              testCase "Streams: checking monadic bind" bindTest
-            , testCase "Streams: checking simple pipe smap" pipeSMapTest
-            , testCase "Streams: checking smap with context" smapContextTest
-            , testCase "Streams: checking smap result used" smapResultUsedTest
-            ]
+        [ testCase "checking monadic bind" bindTest
+        , testCase "checking simple pipe smap" pipeSMapTest
+        , testCase "checking smap with context" smapContextTest
+        , testCase "checking smap result used" smapResultUsedTest
+        ]

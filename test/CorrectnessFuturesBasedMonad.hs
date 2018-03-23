@@ -181,18 +181,20 @@ notEnoughStateTest = do
   assertEqual "state was wrong." [2,3] (map fromS s :: [Int])
 
 
-testSuite :: [Test.Framework.Test]
-testSuite = [
-              testCase "Futures: checking monadic return" returnTest
-            , testCase "Futures: checking monadic bind" bindTest
-            , testCase "Futures: checking simple pipe smap" pipeSMapTest
-            , testCase "Futures: checking smap with context" smapContextTest
-            , testCase "Futures: checking smap result used" smapResultUsedTest
-            , testCase "Futures: checking packaged version" packagedBindTest
-            , testCase "Futures: checking case statement" caseTest
-            , testCase "Futures: checking smap-case composition" caseSmapTest
-            , testCase "Futures: simple nested case composition" nestedCaseTest
-            , testCase "Futures: heterogeneous state" hetStateTest
+testSuite :: Test.Framework.Test
+testSuite =
+    testGroup
+        "Futures"
+        [ testCase "checking monadic return" returnTest
+        , testCase "checking monadic bind" bindTest
+        , testCase "checking simple pipe smap" pipeSMapTest
+        , testCase "checking smap with context" smapContextTest
+        , testCase "checking smap result used" smapResultUsedTest
+        , testCase "checking packaged version" packagedBindTest
+        , testCase "checking case statement" caseTest
+        , testCase "checking smap-case composition" caseSmapTest
+        , testCase "simple nested case composition" nestedCaseTest
+        , testCase "heterogeneous state" hetStateTest
             -- , testCase "Futures: too much state" tooMuchStateTest --> this turns into an Error in monad-par that says: "no result"
             -- , testCase "Futures: not enough state" notEnoughStateTest --> turns into the error: Prelude.!!: index too large
-            ]
+        ]
