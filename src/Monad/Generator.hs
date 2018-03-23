@@ -1,7 +1,7 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MonadComprehensions    #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
-module Generator where
+module Monad.Generator where
 
 
 import           Control.Applicative
@@ -42,7 +42,9 @@ yield = flip Yield
 
 -- You can see the generator in action by runnning the examples at the bottom in ghci with `runGenerator`
 
-
+isFinished :: Generator a -> Bool
+isFinished Finished = True
+isFinished _ = False
 
 instance Monoid (Generator a) where
   mempty = Finished

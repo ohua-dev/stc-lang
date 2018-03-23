@@ -42,7 +42,8 @@ module Data.Dynamic2
         dynApp,
         dynTypeRep,
 
-        forceDynamic
+        forceDynamic,
+        TypeCastException(..)
 
   ) where
 

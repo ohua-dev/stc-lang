@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP              #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Type.Magic (injectList, extractList) where
+module Type.Magic (injectList, extractList, extractFunctor) where
 
 
 #if __GLASGOW_HASKELL__ >= 802

@@ -50,7 +50,7 @@ module Monad.StreamsBasedFreeMonad
 import           Control.Monad
 import           Control.Monad.Except
 -- import           Control.Monad.Par        as P
-import           Control.Arrow            (first, second, (&&&), (***))
+import           Control.Arrow            (first, (&&&))
 import           Control.Monad.Reader
 import           Control.Monad.RWS        as RWS
 import           Control.Monad.State      as S
@@ -61,6 +61,7 @@ import           Control.Monad.State      as S
 --
 import           Control.Concurrent.Async
 import           Control.Concurrent.Chan
+import           Control.Concurrent.MVar
 import           Control.Exception
 import           Control.Monad.Free
 -- import           Control.Parallel         (pseq)
@@ -73,16 +74,12 @@ import           Data.List                (find, findIndex, nub, sortOn)
 import           Data.Map                 ((!))
 import qualified Data.Map                 as Map
 import           Data.Maybe
-import qualified Data.Set                 as Set
-import           Data.Tuple
-import           Data.Tuple.OneTuple
-import           Data.Typeable
 import           Data.Vector              (Vector)
 import qualified Data.Vector              as V
 import           Data.Void
-import           Debug.Trace
 import           Lens.Micro
 import           Lens.Micro.Mtl
+import           Monad.Generator
 import qualified Ohua.ALang.Lang          as L
 import qualified Ohua.ALang.Refs          as ARefs
 import           Ohua.Compile
@@ -95,8 +92,6 @@ import           Ohua.Types
 import           Ohua.Unit
 import           Ohua.Util
 import qualified Ohua.Util.Str            as Str
-import           Prelude                  hiding ((!!))
-import qualified Prelude                  as P
 import           System.IO                (hPutStrLn, stderr)
 import           Type.Magic
 
@@ -104,22 +99,8 @@ import           Type.Magic
 united :: Lens' s ()
 united f s = const s <$> f ()
 
-printDebugInfo :: Bool
-printDebugInfo = False
-
-debugPrint :: String -> IO ()
-debugPrint = if printDebugInfo then putStrLn else const $ pure ()
-
 logError :: MonadIO m => String -> m ()
 logError = liftIO . hPutStrLn stderr
-
-(!!) :: [a] -> Int -> a
-l !! i | i < 0 = error $ "Index lower than 0 (" ++ show i ++ ")"
-       | i >= len = error $ "Index too large " ++ show i ++ " > " ++ show len ++ ")"
-       | otherwise = l P.!! i
-  where len = length l
-
-infixl 9 !!
 
 
 -- The free monad
@@ -134,7 +115,7 @@ instance Enum Unique where
   toEnum = Unique
 
 -- | A type tagged tracker for where data flows inside the program
-newtype Var t = Var { unwrapVar :: Unique }
+newtype Var t = Var Unique
 
 
 -- | The monad for the stateful function to run in
@@ -168,7 +149,7 @@ data ASTAction globalState a
     . (Typeable inputType, Typeable returnType)
     => Smap
          (Var inputType -> ASTM globalState (Var returnType))
-         (Var [inputType])
+         (Var (Generator inputType))
          (Var [returnType] -> a)
   | forall returnType
     . Typeable returnType
@@ -260,7 +241,13 @@ smap :: (Typeable a, Typeable b)
      => (Var a -> ASTM globalState (Var b))
      -> Var [a]
      -> ASTM globalState (Var [b])
-smap f lref = liftF $ Smap f lref id
+smap f lref = smapGen f =<< call (liftSf $ sfm . pure . listGenerator) united lref
+
+smapGen :: (Typeable a, Typeable b)
+        => (Var a -> ASTM globalState (Var b))
+        -> Var (Generator a)
+        -> ASTM globalState (Var [b])
+smapGen f lref = liftF $ Smap f lref id
 
 if_ :: Typeable a
     => Var Bool
@@ -281,7 +268,7 @@ class CollectVars t where
               -> ([Var Void] -> ASTM (GlobalState t) (Var (Ret t))) -- ^ the continuation
               -> t
 
-instance (Typeable a, CollectVars b) => CollectVars (Var a -> b) where
+instance CollectVars b => CollectVars (Var a -> b) where
   type Ret (Var a -> b) = Ret b
   type GlobalState (Var a -> b) = GlobalState b
   collectVars l f v = collectVars (toVoidVar v : l) f
@@ -412,18 +399,17 @@ defaultFunctionDict = Map.fromList $
   (captureSingleton, StreamProcessor $ pure $ recieveUntyped 0 >>= \v -> sendUntyped v)
   : map (first dfFnRefName)
     [ (DFRefs.smapFun, StreamProcessor $ do
-          stateVar <- liftIO $ newIORef []
+          stateVar <- liftIO $ newMVar mempty
           pure $ do
-            l <- recieveUntyped 0
-            withIsAllowed $
-              sendUntyped =<<
-                liftIO (atomicModifyIORef' stateVar
-                        $ \case
-                           [] -> case extractList l of
-                                   []     -> error "new input list was empty"
-                                   (x:xs) -> (xs, x)
-                           (x:xs) -> (xs, x))
-      )
+            dynG <- recieveUntyped 0
+            withIsAllowed $ do
+              oldGen <- liftIO $ takeMVar stateVar
+              (x, newGen) <- liftIO $ runGeneratorOnce oldGen >>=
+                maybe
+                  (fromMaybe (error "new gen was empty") <$> runGeneratorOnce (extractFunctor dynG))
+                  pure
+              send x
+              liftIO $ putMVar stateVar newGen)
     , (DFRefs.collect, StreamProcessor $ pure $ do
           size <- recieve 0
           withIsAllowed $ do

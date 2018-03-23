@@ -24,6 +24,7 @@ library
                        , Data.Dynamic2
                        , Data.StateElement
                        , Type.Magic
+                       , Monad.Generator
   if impl(ghc >= 8.2.0)
     other-modules:       Type.Magic.GHC8
   else
