@@ -3,7 +3,7 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Type.Magic.OldGHC
-  (extractList, injectList, extractFunctor
+  (extractList, injectList, extractFunctor, injectFunctor
   ) where
 
 
@@ -32,16 +32,19 @@ extractFunctor = \(Dynamic trl dl) ->
         _ -> error $ "Wrong kind for constructor " ++ show tyCon
     else throw $ TypeCastException expectedTy (mkTyConApp tyCon [])
   where
-    !expectedTy = typeRep (Proxy :: Proxy f)
+    !expectedTy = typeOf (Proxy :: Proxy f)
     !expectedTyCon = typeRepTyCon expectedTy
 
 
 extractList :: Dynamic -> [Dynamic]
 extractList = extractFunctor
 
-injectList :: [Dynamic] -> Dynamic
-injectList [] = error "Cannot convert empty list yet"
-injectList l@(Dynamic tra _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
+injectFunctor :: forall f . (Typeable f, Functor f) => Dynamic -> f Dynamic -> Dynamic
+injectFunctor (Dynamic tra _) l = Dynamic tr $ unsafeCoerce $ fmap unwrap l
   where
     unwrap (Dynamic _ v) = v
-    tr = mkTyConApp (typeRepTyCon (typeRep (Proxy :: Proxy [()]))) [tra]
+    tr = mkTyConApp (typeRepTyCon (typeOf (Proxy :: Proxy f))) [tra]
+
+
+injectList [] = error "Cannot convert empty list yet"
+

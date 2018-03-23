@@ -1,14 +1,15 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MonadComprehensions    #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
+{-# LANGUAGE TypeFamilies  #-}
 module Monad.Generator where
 
-
-import           Control.Applicative
-import           Control.Arrow
-import           Control.Concurrent.MVar
-import           Control.Monad.State
-import           Data.Tuple
+import Control.Applicative
+import Control.Arrow
+import Control.Concurrent.MVar
+import Control.Monad.State
+import Data.Tuple
+import GHC.Exts (IsList(..))
 
 ------------------------------------------------------------------
 --
@@ -81,6 +82,11 @@ instance Alternative Generator where
 instance MonadIO Generator where
   liftIO = NeedM . fmap pure
 
+instance IsList (Generator a) where
+  type Item (Generator a) = a
+  fromList = listGenerator
+  toList _ = error "toList: need IO to evaluate generator"
+
 -- | Run a generator producing a list of output values
 runGenerator :: Generator a -> IO [a]
 runGenerator Finished    = pure []
@@ -96,7 +102,18 @@ runGeneratorOnce (NeedM ac)  = ac >>= runGeneratorOnce
 runGeneratorOnce (Yield g a) = pure $ Just (a, g)
 
 
-------------------------------------------------------------------
+foldlGenerator :: MonadIO m => (b -> a -> m b) -> Generator a -> b -> m b
+foldlGenerator ac = go
+  where
+    go gen seed' =
+        liftIO (runGeneratorOnce gen) >>=
+        maybe (pure seed') (\(a, gen') -> go gen' =<< ac seed' a)
+
+foldlGenerator_ :: MonadIO m => (a -> m ()) -> Generator a -> m ()
+foldlGenerator_ f g = foldlGenerator (\() a -> f a) g ()
+
+
+-----------------------------------------------------------------
 --
 -- Creating generators
 --

@@ -4,7 +4,7 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications    #-}
-module Type.Magic.GHC8 (injectList, extractFunctor, extractList) where
+module Type.Magic.GHC8 (injectList, extractFunctor, extractList, injectFunctor) where
 
 import           Control.Exception
 import           Data.Dynamic2     (Dynamic (..), TypeCastException (..))
@@ -28,14 +28,17 @@ extractFunctor = \case
 extractList :: Dynamic -> [Dynamic]
 extractList = extractFunctor
 
-injectList :: [Dynamic] -> Dynamic
-injectList [] = error "Cannot convert empty list yet"
-injectList l@(Dynamic (SomeTypeRep tra) _:_) = Dynamic tr $ unsafeCoerce $ map unwrap l
+injectFunctor :: forall f . (Typeable f, Functor f) => Dynamic -> f Dynamic -> Dynamic
+injectFunctor (Dynamic (SomeTypeRep tra) _) l = Dynamic tr $ unsafeCoerce $ fmap unwrap l
   where
     unwrap (Dynamic _ v) = v
     tr = case traKind `eqTypeRep` kindStar of
-           Just HRefl -> SomeTypeRep $ App (typeRep @[]) tra
+           Just HRefl -> SomeTypeRep $ App (typeRep @f) tra
            Nothing    -> throw $ TypeCastException (SomeTypeRep traKind) (SomeTypeRep kindStar)
       where
         traKind = typeRepKind tra
         kindStar = typeRep @Type
+
+injectList :: [Dynamic] -> Dynamic
+injectList [] = error "cannot convert empty list"
+injectList l@(x:_) = injectFunctor x l

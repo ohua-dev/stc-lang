@@ -39,7 +39,7 @@ packages:
 - .
 - location:
     git: git@github.com:ohua-dev/ohua-core
-    commit: a8ec3284d39f619bce4eefdcf5d5c04bf4df8b18
+    commit: 8970a0b1116ab9446594638bb4945620a78f0ea0
   extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
