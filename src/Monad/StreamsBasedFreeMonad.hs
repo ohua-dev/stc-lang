@@ -49,6 +49,7 @@ module Monad.StreamsBasedFreeMonad
     , gt
     -- ** builtins
     , smap
+    , smapGen
     , if_
     -- ** Running
     , createAlgo
@@ -293,7 +294,7 @@ tSmap :: FunctorTaggedBinding []
 tSmap = FunctorTaggedBinding ARefs.smap
 
 tSmapG :: FunctorTaggedBinding Generator
-tSmapG = FunctorTaggedBinding "ohua.lang/smapG"
+tSmapG = FunctorTaggedBinding ARefs.smapG
 
 -- | The smap primitive. Applies an ohua program to each value from a collection.
 -- The semantics guarantee that the values are processed in-order with respects to each
@@ -529,11 +530,27 @@ defaultFunctionDict =
                               , toDyn False
                               ]
                         ]
-                withIsAllowed $
-                  foldlGenerator_ send gWithFlush)
-        , (DFRefs.collectG, StreamProcessor $ pure $ do
-              l@(x:_) <- whileM (recieve 0) (recieveUntyped 1)
-              sendUntyped $ injectFunctor x $ listGenerator l)
+                withIsAllowed $ foldlGenerator_ send gWithFlush)
+        , ( DFRefs.collectG
+          , StreamProcessor $
+            pure $ do
+                l@(x:_) <- whileM (recieve 0) (recieveUntyped 1)
+                sendUntyped $ injectFunctor x $ listGenerator l)
+        , ( DFRefs.repeat
+          , StreamProcessor $ do
+                stateStore <- liftIO $ newMVar Nothing
+                pure $ do
+                    withIsAllowed $ do
+                        b <- recieve 0
+                        if b
+                            then do
+                                vals <-
+                                    liftIO (takeMVar stateStore) >>=
+                                    maybe (recieveWhereUntyped (/= 0)) pure
+                                liftIO $ putMVar stateStore $ Just vals
+                                send vals
+                            else liftIO $
+                                 modifyMVar_ stateStore (const $ pure Nothing))
         ]
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
@@ -775,9 +792,12 @@ recieveSource finish =
         UserPacket u -> pure u
 
 recieveAllUntyped :: StreamM (Vector Dynamic)
-recieveAllUntyped = do
-    sources <- StreamM (view _2)
-    V.imapM (\i s -> recieveSource (endProcessing i) s) sources
+recieveAllUntyped =
+    StreamM (view _2) >>= V.imapM (\i s -> recieveSource (endProcessing i) s)
+
+recieveWhereUntyped :: (Int -> Bool) -> StreamM (Vector Dynamic)
+recieveWhereUntyped p =
+  StreamM (view _2) >>= V.imapM (\i s -> recieveSource (endProcessing i) s) . V.ifilter (const . p)
 
 recieveAll :: Typeable a => StreamM (Vector a)
 recieveAll = fmap forceDynamic <$> recieveAllUntyped
