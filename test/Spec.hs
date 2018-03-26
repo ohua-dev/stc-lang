@@ -10,7 +10,9 @@ import Monad.StreamsBasedFreeMonad
 import Test.Framework.Providers.HUnit
 import Test.HUnit hiding (Test)
 import Control.Monad.IO.Class
-
+import Lens.Micro (lens, Lens')
+import Control.Monad.State (get, put)
+import Data.Functor.Identity
 
 
 main :: IO ()
@@ -77,23 +79,53 @@ basicRuntimeTests =
                         ]
               ]
         , testGroup
-              "smapGen"
-              [ testCase "mapping a single function" $ do
-                    let f = (+ 3)
-                    result <-
-                        flip runOhuaM () $ do
-                            l <- sfConst [0 :: Int .. 10]
-                            call (liftSf $ sfm . liftIO . runGenerator) united =<<
-                                smapGen (simpleLift f) l
-                    assertEqual "" (result :: [Int]) (map f [0 .. 10])
-              , testCase "mapping a single function with free variables" $ do
-                    let f = (+ 3)
-                    result <-
-                        flip runOhuaM () $ do
-                            l <- sfConst [0 .. 10]
-                            f' <- sfConst f
-                            call (liftSf $ sfm . liftIO . runGenerator) united =<<
-                                smapGen (simpleLift2 ($) f') l
-                    assertEqual "" (result :: [Int]) (map f [0 .. 10])
+              "generator"
+              [ testGroup
+                    "mapping"
+                    [ testCase "a single function" $ do
+                          let f = (+ 3)
+                          result <-
+                              flip runOhuaM () $ do
+                                  l <- sfConst [0 :: Int .. 10]
+                                  call
+                                      (liftSf $ sfm . liftIO . runGenerator)
+                                      united =<<
+                                      smapGen (simpleLift f) l
+                          assertEqual "" (result :: [Int]) (map f [0 .. 10])
+                    , testCase "a single function with free variables" $ do
+                          let f = (+ 3)
+                          result <-
+                              flip runOhuaM () $ do
+                                  l <- sfConst [0 .. 10]
+                                  f' <- sfConst f
+                                  call
+                                      (liftSf $ sfm . liftIO . runGenerator)
+                                      united =<<
+                                      smapGen (simpleLift2 ($) f') l
+                          assertEqual "" (result :: [Int]) (map f [0 .. 10])
+                    ]
+              , testGroup
+                    "generating"
+                    [ testCase "generate only" $ do
+                          let l = [1 .. 10]
+                              idLens :: Lens' [Int] [Int] 
+                              idLens = lens id (\_ a ->  a)
+                          result <-
+                              flip runOhuaM l $ do
+                                  g <-
+                                      generate $
+                                      call
+                                          (liftSf $
+                                           sfm $ do
+                                               s <- get
+                                               case s of
+                                                   x:xs -> do
+                                                       put xs
+                                                       pure $ Just x
+                                                   [] -> pure Nothing)
+                                          idLens
+                                  call (liftSf $ sfm . liftIO . runGenerator) united g
+                          assertEqual "lists differ" result l
+                    ]
               ]
         ]

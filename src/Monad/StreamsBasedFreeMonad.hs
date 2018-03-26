@@ -51,6 +51,7 @@ module Monad.StreamsBasedFreeMonad
     , smap
     , smapGen
     , if_
+    , generate
     -- ** Running
     , createAlgo
     , defaultFunctionDict
@@ -333,6 +334,12 @@ if_ :: Typeable a
     -> ASTM s (Var a)
 if_ b then_ else_ = liftF $ If b then_ else_ id
 
+generate ::
+       (Typeable a)
+    => (ASTM globalState (Var (Maybe a)))
+    -> ASTM globalState (Var (Generator a))
+generate f = liftF $ Generate f id
+
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t
   -- | As this class calls itself recursively this whitnesses that
@@ -567,9 +574,7 @@ defaultFunctionDict =
                                     maybe recieveVals pure
                                 liftIO $ putMVar stateStore $ Just vals
                                 send vals
-                            else recieveVals >>=
-                                 liftIO .
-                                 modifyMVar_ stateStore . const . pure . Just)
+                            else liftIO $ modifyMVar_ stateStore (const $ pure Nothing))
         , ( DFRefs.isJust
           , StreamProcessor $
             pure $
