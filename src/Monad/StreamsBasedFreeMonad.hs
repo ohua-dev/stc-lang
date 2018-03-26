@@ -110,6 +110,8 @@ import Control.Monad.State as S
 -- import Scheduler as P
 -- import Control.DeepSeq
 --
+import Control.Monad.STM
+import Control.Concurrent.STM.TChan
 import Control.Concurrent.Async
 import Control.Concurrent.Chan
 import Control.Concurrent.MVar
@@ -192,7 +194,8 @@ data Sf fnType =
                              Sf fnType
                                 (Maybe QualifiedBinding) -- reference to the actual function
 
--- | A way to retrieve and update local state in a larger state structure
+-- | A way to retrieve and update local state in a larger state
+-- structure
 type Accessor s a = Lens' s a
 
 -- | Things you can do in the AST Monad
@@ -215,6 +218,9 @@ data ASTAction globalState a
                             (ASTM globalState (Var returnType))
                             (ASTM globalState (Var returnType))
                             (Var returnType -> a)
+    | forall returnType. Typeable returnType =>
+                         Generate (ASTM globalState (Var (Maybe returnType)))
+                                  (Var (Generator returnType) -> a)
 
 -- | The AST Monad
 newtype ASTM globalState a =
@@ -225,9 +231,11 @@ instance Functor (ASTAction globalState) where
     fmap f (InvokeSf sf tag vars ac) = InvokeSf sf tag vars (f . ac)
     fmap f (SmapLike bnd f1 v cont) = SmapLike bnd f1 v (f . cont)
     fmap f (If v th el cont) = If v th el (f . cont)
+    fmap f (Generate gf cont) = Generate gf (f . cont)
 
--- | This type level function retrieves the return type of a function with any arity.
--- So long as the input type is a function type, aka (->) it recurses onto the rhs.
+-- | This type level function retrieves the return type of a function
+-- with any arity.  So long as the input type is a function type, aka
+-- (->) it recurses onto the rhs.
 --
 -- aka
 -- @
@@ -236,28 +244,32 @@ instance Functor (ASTAction globalState) where
 --  ReturnType (a -> b -> c) = c
 -- @
 --
--- Together with 'InputList' this can be used to decompose function types
+-- Together with 'InputList' this can be used to decompose function
+-- types
 type family ReturnType (t :: Type) :: Type where
     ReturnType (a -> b) = ReturnType b
     ReturnType b = b
 
 -- | Make a stateful function from some arbitrary function of type @f@
 --
--- @f@ is not required to have any arguments but must return in the 'SfMonad'
+-- @f@ is not required to have any arguments but must return in the
+-- 'SfMonad'
 liftSf ::
        (ReturnType f ~ SfMonad state ret, Typeable ret, ApplyVars f)
     => f
     -> Sf f
 liftSf f = Sf f Nothing
 
--- | A convenience function.
--- It doesn't actually do anything (@sfm = id@) but it has a concrete type and therefore
--- can be used to help the compiler when it infers the type of a function pased to 'liftSf'.
+-- | A convenience function. It doesn't actually do anything (@sfm =
+-- id@) but it has a concrete type and therefore can be used to help
+-- the compiler when it infers the type of a function pased to
+-- 'liftSf'.
 --
--- Because of the type level computation used on the function type the functions
--- often have to be annotated like so @liftSf (\\... -> ... :: SfMonad t0 t1)@
--- or otherwise the compiler is unable to infer the type.
--- The same can be achieved with this function @liftSf (\\... -> sfm $ ...)@.
+-- Because of the type level computation used on the function type the
+-- functions often have to be annotated like so @liftSf (\\... ->
+-- ... :: SfMonad t0 t1)@ or otherwise the compiler is unable to infer
+-- the type.  The same can be achieved with this function @liftSf
+-- (\\... -> sfm $ ...)@.
 sfm :: SfMonad s a -> SfMonad s a
 sfm = id
 
@@ -271,9 +283,9 @@ type family SetReturnType f t where
     SetReturnType f (a -> b) = a -> SetReturnType f b
     SetReturnType f _ = f
 
--- | "Call" a stateful function.
--- This takes a lifted function (see 'liftSf'), links it with an accessor for the
--- state that this function uses and produces a function that can be used in 'ASTM'
+-- | "Call" a stateful function.  This takes a lifted function (see
+-- 'liftSf'), links it with an accessor for the state that this
+-- function uses and produces a function that can be used in 'ASTM'
 call ::
        ( newFnType ~ SetReturnType (ASTM globalState (Var ret)) (MapFnType Var f)
        , ReturnType f ~ SfMonad state ret
@@ -297,9 +309,9 @@ tSmap = FunctorTaggedBinding ARefs.smap
 tSmapG :: FunctorTaggedBinding Generator
 tSmapG = FunctorTaggedBinding ARefs.smapG
 
--- | The smap primitive. Applies an ohua program to each value from a collection.
--- The semantics guarantee that the values are processed in-order with respects to each
--- node in the subgraph.
+-- | The smap primitive. Applies an ohua program to each value from a
+-- collection.  The semantics guarantee that the values are processed
+-- in-order with respects to each node in the subgraph.
 smap ::
        (Typeable a, Typeable b)
     => (Var a -> ASTM globalState (Var b))
@@ -324,11 +336,13 @@ if_ b then_ else_ = liftF $ If b then_ else_ id
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t
   -- | As this class calls itself recursively this whitnesses that
-  -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM state (Var r)@
+  -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM
+  -- state (Var r)@
     where
     type Ret t
   -- | This exists becuase we need a whitness that the @state@ type in
-  -- the ASTM continuation is the same as in the ASTM value returned by @t@ in the end.
+  -- the ASTM continuation is the same as in the ASTM value returned
+  -- by @t@ in the end.
     type GlobalState t
     collectVars ::
            [Var Void] -- ^ The input values
@@ -346,7 +360,8 @@ instance CollectVars (ASTM gs (Var (a :: *))) where
     collectVars l f = f l
 
 -- Evaluating the free monad
--- | Another way of referencing a stateful function. This one also contains an accessor for the state
+-- | Another way of referencing a stateful function. This one also
+-- contains an accessor for the state
 data SfRef globalState =
     forall sfType state returnType. (ReturnType sfType ~ SfMonad state returnType) =>
                                     SfRef (Sf sfType)
@@ -393,14 +408,15 @@ instance FreshUnique (EvalASTM s) where
 evalASTM :: EvalASTM s a -> (FunctionDict s, L.Expression -> L.Expression, a)
 evalASTM (EvalASTM ac) = (d, m, a)
   where
+    throwErrs = either (error . Str.toString) id
     (a, (d, _, _, _, _), Mutator m) =
         runRWS
             ac
             ()
             ( defaultFunctionDict
             , mempty
-            , initNameGen mempty
-            , initNameGen mempty
+            , throwErrs $ initNameGen mempty
+            , throwErrs $ initNameGen mempty
             , Unique 0)
 
 instance MonadGenBnd (EvalASTM s) where
@@ -446,7 +462,7 @@ nthNS :: NSRef
 nthNS = ["ohua", "lang", "nth"]
 
 dN :: Int -> QualifiedBinding
-dN i = QualifiedBinding nthNS (Binding $ Str.showS i)
+dN i = QualifiedBinding nthNS (makeThrow $ Str.showS i)
 
 captureSingleton :: QualifiedBinding
 captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
@@ -540,6 +556,7 @@ defaultFunctionDict =
         , ( DFRefs.repeat
           , StreamProcessor $ do
                 stateStore <- liftIO $ newMVar Nothing
+                let recieveVals = recieveWhereUntyped (/= 0)
                 pure $ do
                     withIsAllowed $ do
                         b <- recieve 0
@@ -547,11 +564,54 @@ defaultFunctionDict =
                             then do
                                 vals <-
                                     liftIO (takeMVar stateStore) >>=
-                                    maybe (recieveWhereUntyped (/= 0)) pure
+                                    maybe recieveVals pure
                                 liftIO $ putMVar stateStore $ Just vals
                                 send vals
-                            else liftIO $
-                                 modifyMVar_ stateStore (const $ pure Nothing))
+                            else recieveVals >>=
+                                 liftIO .
+                                 modifyMVar_ stateStore . const . pure . Just)
+        , ( DFRefs.isJust
+          , StreamProcessor $
+            pure $
+            withIsAllowed $
+            send =<< (isJust . extractFunctor <$> recieveUntyped 0))
+        , ( DFRefs.ndMerge
+          , StreamProcessor $
+            pure $
+            withIsAllowed $ do
+                let exhaust c =
+                        forever $
+                        withIsAllowed $
+                        recieveSource
+                            (closeCtxArc >>
+                             endProcessingAt (\i -> i /= 1 && i /= 0)) c >>=
+                        send
+                    runOrExhaust _ (UserPacket p) =
+                        send $ (forceDynamic p :: Bool)
+                    runOrExhaust c EndOfStreamPacket = exhaust c
+                s1@(Source c1) <- getSource 0
+                s2@(Source c2) <- getSource 1
+                liftIO (atomically $ (Left <$> c1) `orElse` (Right <$> c2)) >>=
+                    either (runOrExhaust s1) (runOrExhaust s2))
+        , ( DFRefs.toGen
+          , StreamProcessor $ do
+                chanStore <- liftIO $ newMVar Nothing
+                verifyInputNum 1
+                pure $ do
+                    currGeneratorChan <-
+                        liftIO (takeMVar chanStore) >>= \case
+                            Nothing -> do
+                                c <- liftIO newChan
+                                send $ chanToGenerator c
+                                pure $ liftIO . writeChan c
+                            Just f -> pure f
+                    v <- extractFunctor <$> recieveUntyped 0
+                    currGeneratorChan v
+                    liftIO $
+                        putMVar chanStore $
+                        if isNothing v
+                            then Nothing
+                            else Just currGeneratorChan)
         ]
 
 evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
@@ -605,6 +665,15 @@ evaluateAST (ASTM m) = (dict, build e)
                  L.Var (L.Local vbnd) `L.Apply`
                  L.Lambda "_" thenE `L.Apply`
                  L.Lambda "_" elseE)
+        cont rv
+    go (Generate inner cont) = do
+        (rv, rb) <- mkRegVar
+        innerE <- evalInner inner
+        tellMut $
+            L.Let
+                (Direct rb)
+                (L.Var (L.Sf ARefs.generate Nothing) `L.Apply`
+                 L.Lambda "_" innerE)
         cont rv
       
 
@@ -663,7 +732,7 @@ graphToAlgo dict G.OutGraph {..} =
             StreamProcessor $ pure $ do
                 input <- recieve 0
                 sendUntyped $ input V.!
-                    read (Str.toString . unBinding $ qbName opType)
+                    read (Str.toString . unwrap $ qbName opType)
         | otherwise =
             fromMaybe (error $ "cannot find " ++ show opType) $
             Map.lookup opType dict
@@ -672,8 +741,10 @@ graphToAlgo dict G.OutGraph {..} =
     lastArg =
         fromMaybe (error "no capture op") $ lookup captureSingleton $
         map (first G.operatorType) opWRet
-    -- The `sortOn` here is dangerous. it relies on there being *exactly one* input present for every
-    -- argument to the function. If that invariant is broken we will not detect it here but get runtime errors
+    -- The `sortOn` here is dangerous. it relies on there being
+    -- *exactly one* input present for every argument to the
+    -- function. If that invariant is broken we will not detect it
+    -- here but get runtime errors
     argDict = fmap partitionArgs $ Map.fromListWith (++) $ map arcToUnique arcs
     partitionArgs l =
         ( snd <$> find ((== -1) . fst) l
@@ -708,19 +779,18 @@ isEOS _ = False
 
 -- | A recieve end of a communication channel
 newtype Source a = Source
-    { unSource :: IO (Packet a)
+    { unSource :: STM (Packet a)
     }
 
 -- | A send end of a communication channel
 newtype Sink a = Sink
-    { unSink :: Packet a -> IO ()
+    { unSink :: Packet a -> STM ()
     }
 
--- | The monad that a stream processor runs in.
--- It has access to a number of input streams to pull from
--- and a number of output streams to send to.
--- Additionally IO is enabled with 'MonadIO' and a short circuiting via 'abortProcessing'
--- which stops the processing.
+-- | The monad that a stream processor runs in. It has access to a
+-- number of input streams to pull from and a number of output streams
+-- to send to.  Additionally IO is enabled with 'MonadIO' and a short
+-- circuiting via 'abortProcessing' which stops the processing.
 newtype StreamM a = StreamM
     { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Source Dynamic)
                                                     , Vector (Source Dynamic)
@@ -729,13 +799,14 @@ newtype StreamM a = StreamM
 
 type StreamInit a = StreamM (StreamM a)
 
--- | Create a stream with a end that can only be sent to and one that can only be read from.
+-- | Create a stream with a end that can only be sent to and one that
+-- can only be read from.
 createStream :: IO (Sink a, Source a)
-createStream = (Sink . writeChan &&& Source . readChan) <$> newChan
+createStream = (Sink . writeTChan &&& Source . readTChan) <$> atomically newTChan
 
 -- | Send a packet to all output streams
 sendPacket :: Packet Dynamic -> StreamM ()
-sendPacket p = StreamM $ liftIO . mapM_ (($ p) . unSink) =<< view _3
+sendPacket p = StreamM $ liftIO . atomically . mapM_ (($ p) . unSink) =<< view _3
 
 -- | Stop processing immediately. No subsequent actions are performed.
 abortProcessing :: StreamM a
@@ -750,11 +821,13 @@ endProcessingAt p = do
     numChans <- StreamM $ length <$> view _2
     vals <-
         mapM (recievePacket <=< getSource) [x | x <- [0 .. numChans - 1], p x]
-    sendEOS -- make sure the error of having excess input does not propagate unnecessarily
+    sendEOS -- make sure the error of having excess input does not
+            -- propagate unnecessarily
     case findIndex (not . isEOS) vals of
         Nothing -> abortProcessing
         Just i
-      -- eventually we'll want to send some information here which port had data left over in it
+      -- eventually we'll want to send some information here which
+      -- port had data left over in it
          -> packetsLeftOverErr (show i)
 
 withCtxArc :: StreamM a -> (Source Dynamic -> StreamM a) -> StreamM a
@@ -779,7 +852,7 @@ sendEOS :: StreamM ()
 sendEOS = sendPacket EndOfStreamPacket
 
 recievePacket :: Source a -> StreamM (Packet a)
-recievePacket = StreamM . liftIO . unSource
+recievePacket = StreamM . liftIO . atomically . unSource
 
 getSource :: Int -> StreamM (Source Dynamic)
 getSource i = StreamM $ (V.! i) <$> view _2
@@ -799,7 +872,8 @@ recieveAllUntyped =
 
 recieveWhereUntyped :: (Int -> Bool) -> StreamM (Vector Dynamic)
 recieveWhereUntyped p =
-  StreamM (view _2) >>= V.imapM (\i s -> recieveSource (endProcessing i) s) . V.ifilter (const . p)
+    StreamM (view _2) >>=
+    V.imapM (\i s -> recieveSource (endProcessing i) s) . V.ifilter (const . p)
 
 recieveAll :: Typeable a => StreamM (Vector a)
 recieveAll = fmap forceDynamic <$> recieveAllUntyped
@@ -809,7 +883,8 @@ recieve = fmap forceDynamic . recieveUntyped
 
 verifyInputNum :: Int -> StreamM ()
 verifyInputNum expected =
-    StreamM $ (length <$> view _2) >>= \i ->
+    StreamM $
+    (length <$> view _2) >>= \i ->
         if expected == i
             then pure ()
             else error $ "Expected " ++ show expected ++ " got " ++ show i
@@ -831,8 +906,8 @@ withIsAllowed ac =
 atomicModifyIORef'_ :: MonadIO m => IORef a -> (a -> a) -> m ()
 atomicModifyIORef'_ ref f = liftIO $ atomicModifyIORef' ref ((, ()) . f)
 
--- | A class that is used to apply a function with multiple arguments to a
--- list of arguments.
+-- | A class that is used to apply a function with multiple arguments
+-- to a list of arguments.
 class ApplyVars t where
     applyVars :: t -> [Dynamic] -> ReturnType t
 
@@ -844,7 +919,8 @@ instance ApplyVars (SfMonad state retType) where
     applyVars res [] = res
     applyVars _ _ = error "Too many arguments"
 
--- | Given a reference for a stateful function run it as a stream processor
+-- | Given a reference for a stateful function run it as a stream
+-- processor
 runFunc :: SfRef globalState -> IORef globalState -> StreamInit ()
 runFunc (SfRef (Sf f _) accessor) stTrack =
     pure $ do
@@ -929,7 +1005,8 @@ runAlgo (Algorithm nodes retVar) st = do
             (sinks, sources) <- unzip <$> mapM (const createStream) inputs
             let newMap =
                     foldl
-                        (\theMap (u, chan) -> Map.update (Just . (chan :)) u theMap)
+                        (\theMap (u, chan) ->
+                             Map.update (Just . (chan :)) u theMap)
                         m
                         (zip inputs sinks)
             (newMap', ctxArc) <-
@@ -971,8 +1048,8 @@ runAlgo (Algorithm nodes retVar) st = do
                  waitCatch thread)
     if null errors
         then do
-            UserPacket ret <- retSource
-            EndOfStreamPacket <- retSource
+            UserPacket ret <- atomically retSource
+            EndOfStreamPacket <- atomically retSource
             pure $ forceDynamic ret
         else throwIO $ ExecutionException errors
 

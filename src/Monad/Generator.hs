@@ -10,6 +10,7 @@ import Control.Concurrent.MVar
 import Control.Monad.State
 import Data.Tuple
 import GHC.Exts (IsList(..))
+import Control.Concurrent.Chan
 
 ------------------------------------------------------------------
 --
@@ -112,6 +113,10 @@ foldlGenerator ac = go
 foldlGenerator_ :: MonadIO m => (a -> m ()) -> Generator a -> m ()
 foldlGenerator_ f g = foldlGenerator (\() a -> f a) g ()
 
+chanToGenerator :: Chan (Maybe a) -> Generator a
+chanToGenerator c = recur
+  where
+    recur = NeedM $ maybe Finished (Yield recur) <$> readChan c
 
 -----------------------------------------------------------------
 --
