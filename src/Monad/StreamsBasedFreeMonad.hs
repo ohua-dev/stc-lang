@@ -56,7 +56,6 @@ module Monad.StreamsBasedFreeMonad
     , createAlgo
     , defaultFunctionDict
     , evaluateAST
-    , graphToAlgo
     , runCompiler
     , runAlgo
     -- ** The stream monad
@@ -73,7 +72,6 @@ module Monad.StreamsBasedFreeMonad
     , expectFinish
     , sendEOS
     , recievePacket
-    , getSource
     , recieveUntyped
     , recieveAllUntyped
     , recieve
@@ -94,7 +92,6 @@ module Monad.StreamsBasedFreeMonad
     , T
     , makeDestructuringExplicit
     , united
-    , printGraph
     ) where
 
 import Control.Monad
@@ -120,14 +117,17 @@ import Control.Exception
 import Control.Monad.Free
 
 -- import           Control.Parallel         (pseq)
+import Control.Applicative
+import Control.Arrow (second)
+import Control.Monad.Loops
 import Data.Default.Class
 import Data.Dynamic2
+import Data.Either (lefts)
 import Data.Foldable (fold)
 import Data.IORef
-import Data.Kind
-import Data.List (find, findIndex, nub, sortOn, partition)
 import qualified Data.IntMap as IMap
-import Data.Map ((!))
+import Data.Kind
+import Data.List (find, nub, sortOn)
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Vector (Vector)
@@ -139,6 +139,7 @@ import Monad.Generator
 import qualified Ohua.ALang.Lang as L
 import qualified Ohua.ALang.Refs as ARefs
 import Ohua.Compile
+import qualified Ohua.Constants.HostExpr as HEConst
 import qualified Ohua.DFGraph as G
 import Ohua.DFLang.Lang (DFFnRef(..))
 import qualified Ohua.DFLang.Refs as DFRefs
@@ -150,9 +151,8 @@ import Ohua.Util
 import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
 import Type.Magic
-import Control.Monad.Loops
-import Control.Applicative
-import Control.Arrow (second)
+
+
 
 
 
@@ -394,8 +394,8 @@ data Node globalState = Node
     }
 
 data Algorithm globalState a =
-    Algorithm [Node globalState]
-              Unique
+    Algorithm G.OutGraph
+              (FunctionDict globalState)
 
 type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
 
@@ -439,7 +439,7 @@ generateSFunctionName =
 
 -- | Evaluate the AST Monad and ceate a graph
 createAlgo :: ASTM s (Var a) -> IO (Algorithm s a)
-createAlgo astm = graphToAlgo dict <$> runCompiler expr
+createAlgo astm = flip Algorithm dict <$> runCompiler expr
   where
     (dict, expr) = evaluateAST astm
 
@@ -577,7 +577,8 @@ defaultFunctionDict =
                                     maybe recieveVals pure
                                 liftIO $ putMVar stateStore $ Just vals
                                 send vals
-                            else liftIO $ modifyMVar_ stateStore (const $ pure Nothing))
+                            else liftIO $
+                                 modifyMVar_ stateStore (const $ pure Nothing))
         , ( DFRefs.isJust
           , StreamProcessor $
             pure $
@@ -592,15 +593,22 @@ defaultFunctionDict =
                         withIsAllowed $
                         recieveSource
                             (closeCtxArc >>
-                             endProcessingAt (\i -> i /= 1 && i /= 0)) c >>=
+                             endProcessingAt (\i -> i /= 1 && i /= 0))
+                            c >>=
                         send
                     runOrExhaust _ (UserPacket p) =
                         send $ (forceDynamic p :: Bool)
                     runOrExhaust c EndOfStreamPacket = exhaust c
-                s1@(Source c1) <- getSource 0
-                s2@(Source c2) <- getSource 1
-                liftIO (atomically $ (Left <$> c1) `orElse` (Right <$> c2)) >>=
-                    either (runOrExhaust s1) (runOrExhaust s2))
+                p1 <- getInputPort 0
+                p2 <- getInputPort 1
+                case (p1, p2) of
+                    (ArcPort s1@(Source c1), ArcPort s2@(Source c2)) ->
+                        liftIO
+                            (atomically $ (Left <$> c1) `orElse` (Right <$> c2)) >>=
+                        either (runOrExhaust s1) (runOrExhaust s2)
+                    _ ->
+                        error
+                            "Non deterministic merge with constant arcs makes no sense")
         , ( DFRefs.toGen
           , StreamProcessor $ do
                 chanStore <- liftIO $ newMVar Nothing
@@ -726,48 +734,6 @@ makeDestructuringExplicit G.OutGraph {G.operators, G.arcs, G.returnArc} =
                           ])
             _ -> pure (mempty, pure a)
 
-graphToAlgo :: FunctionDict s -> G.OutGraph -> Algorithm s a
-graphToAlgo dict G.OutGraph {..} =
-    Algorithm (map (uncurry buildOp) opWRet) lastArg
-  where
-    buildOp G.Operator {..} =
-        Node operatorType operatorId (resolveOpType operatorType) ctxArc args
-      where
-        (ctxArc, args) =
-            (fromMaybe (Nothing, []) $ Map.lookup operatorId argDict)
-    resolveOpType opType
-        | nthNS == (qbNamespace opType) =
-            StreamProcessor $ pure $ do
-                input <- recieve 0
-                sendUntyped $ input V.!
-                    read (Str.toString . unwrap $ qbName opType)
-        | otherwise =
-            fromMaybe (error $ "cannot find " ++ show opType) $
-            Map.lookup opType dict
-    opWRet = zip operators [Unique 0 ..]
-    retDict = Map.fromList $ map (first G.operatorId) opWRet
-    lastArg =
-        fromMaybe (error "no capture op") $ lookup captureSingleton $
-        map (first G.operatorType) opWRet
-    -- The `sortOn` here is dangerous. it relies on there being
-    -- *exactly one* input present for every argument to the
-    -- function. If that invariant is broken we will not detect it
-    -- here but get runtime errors
-    argDict = fmap partitionArgs $ Map.fromListWith (++) $ map arcToUnique arcs
-    partitionArgs l =
-        ( snd <$> find ((== -1) . fst) l
-        , map snd $ sortOn fst $ filter ((/= -1) . fst) l)
-    arcToUnique G.Arc { G.target = G.Target {G.operator, G.index = tindex}
-                      , source = src
-                      } =
-        ( operator
-        , case src of
-              G.LocalSource G.Target {G.index, G.operator = srcOp}
-                  | index /= -1 ->
-                      error "invariant broken, destructuring not permitted yet"
-                  | otherwise -> pure (tindex, retDict ! srcOp)
-              _ -> error "invariant broken, we dont have env args")
-
 runCompiler :: L.Expression -> IO G.OutGraph
 runCompiler =
     fmap (either (error . Str.toString) makeDestructuringExplicit) . runExceptT .
@@ -802,7 +768,7 @@ newtype Sink a = Sink
 newtype StreamM a = StreamM
     { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Source Dynamic)
                                                     , Vector InputPort
-                                                    , OutputManager) IO) a
+                                                    , OutputPort) IO) a
     } deriving (Functor, Applicative, Monad, MonadIO)
 
 type StreamInit a = StreamM (StreamM a)
@@ -813,29 +779,35 @@ createStream :: IO (Sink a, Source a)
 createStream =
     (Sink . writeTChan &&& Source . readTChan) <$> atomically newTChan
 
-getUnifiedPort :: StreamM OutputPort
-getUnifiedPort = StreamM $ unifiedPort <$> view _3
+-- getUnifiedPort :: StreamM OutputPort
+-- getUnifiedPort = StreamM $ unifiedPort <$> view _3
 
-getAllIndexedPorts :: StreamM (V.Vector OutputPort)
-getAllIndexedPorts = StreamM $ indexedPorts <$> view _3
+-- getAllIndexedPorts :: StreamM (V.Vector OutputPort)
+-- getAllIndexedPorts = StreamM $ indexedPorts <$> view _3
 
-getIndexedPort :: Int -> StreamM OutputPort
-getIndexedPort i = (V.! i) <$> getAllIndexedPorts
+-- getIndexedPort :: Int -> StreamM OutputPort
+-- getIndexedPort i = (V.! i) <$> getAllIndexedPorts
+
+getOutputPort :: StreamM OutputPort
+getOutputPort = StreamM $ view _3
 
 sendToPort :: Packet Dynamic -> OutputPort -> StreamM ()
 sendToPort p (OutputPort port)
     | V.null port = pure ()
     | otherwise = StreamM $ liftIO $ mapM_ (atomically . ($ p) . unSink) port
 
+sendPacket :: Packet Dynamic -> StreamM ()
+sendPacket p = getOutputPort >>= sendToPort p
+
 -- | Send a packet to all unified output streams
-sendPacketUnified :: Packet Dynamic -> StreamM ()
-sendPacketUnified p = getUnifiedPort >>= sendToPort p
+-- sendPacketUnified :: Packet Dynamic -> StreamM ()
+-- sendPacketUnified p = getUnifiedPort >>= sendToPort p
 
-sendPacketToIndexed :: Int -> Packet Dynamic -> StreamM ()
-sendPacketToIndexed i p = getIndexedPort i >>= sendToPort p
+-- sendPacketToIndexed :: Int -> Packet Dynamic -> StreamM ()
+-- sendPacketToIndexed i p = getIndexedPort i >>= sendToPort p
 
-sendPacketToAllIndexed :: Packet Dynamic -> StreamM ()
-sendPacketToAllIndexed p = getAllIndexedPorts >>= mapM_ (sendToPort p)
+-- sendPacketToAllIndexed :: Packet Dynamic -> StreamM ()
+-- sendPacketToAllIndexed p = getAllIndexedPorts >>= mapM_ (sendToPort p)
 
 -- | Stop processing immediately. No subsequent actions are performed.
 abortProcessing :: StreamM a
@@ -853,13 +825,15 @@ endProcessingAt p = do
         getInputPorts >>=
         V.imapM
             (\i ->
-                 \case
-                     ConstValPort _ -> pure Nothing
-                     ArcPort s ->
-                         recievePacket s <&> \r ->
-                             if isEOS r
-                                 then Nothing
-                                 else Just i)
+                 if p i
+                     then \case
+                              ConstValPort _ -> pure Nothing
+                              ArcPort s ->
+                                  recievePacket s <&> \r ->
+                                      if isEOS r
+                                          then Nothing
+                                          else Just i
+                     else const $ pure Nothing)
     case foldl (<|>) Nothing results of
         Nothing -> abortProcessing
         Just i
@@ -886,9 +860,9 @@ expectFinish :: StreamM a
 expectFinish = closeCtxArc >> endProcessingAt (const True)
 
 sendEOS :: StreamM ()
-sendEOS =
-    sendPacketUnified EndOfStreamPacket >>
-    sendPacketToAllIndexed EndOfStreamPacket
+sendEOS = sendPacket EndOfStreamPacket
+    -- sendPacketUnified EndOfStreamPacket >>
+    -- sendPacketToAllIndexed EndOfStreamPacket
 
 recievePacket :: Source a -> StreamM (Packet a)
 recievePacket = StreamM . liftIO . atomically . unSource
@@ -900,7 +874,7 @@ getInputPort :: Int -> StreamM InputPort
 getInputPort i = (V.! i) <$> getInputPorts
 
 recieveUntyped :: Int -> StreamM Dynamic
-recieveUntyped i = getSource i >>= recieveSource (endProcessing i)
+recieveUntyped i = getInputPort i >>= queryPort i
 
 recieveSource :: StreamM a -> Source a -> StreamM a
 recieveSource finish =
@@ -984,7 +958,7 @@ mountStreamProcessor ::
        StreamInit ()
     -> Maybe (Source Dynamic)
     -> Vector InputPort
-    -> OutputManager
+    -> OutputPort
     -> IO ()
 mountStreamProcessor process ctxInput inputs outputs = do
     result <-
@@ -1043,35 +1017,45 @@ data InputPort = ConstValPort Dynamic | ArcPort (Source Dynamic)
 
 newtype OutputPort = OutputPort (V.Vector (Sink Dynamic))
 
-data OutputManager = OutputManager
-    { indexedPorts :: V.Vector OutputPort
-    , unifiedPort :: OutputPort
-    }
+-- data OutputManager = OutputManager
+--     { indexedPorts :: V.Vector OutputPort
+--     , unifiedPort :: OutputPort
+--     }
 
-toOutputManager :: [(Int, Sink Dynamic)] -> OutputManager
+toOutputManager :: [(Int, Sink Dynamic)] -> OutputPort
 toOutputManager v
     | Just _ <- IMap.lookupLT (-1) unifiedArcsMap =
         error "Cannot have target index less than -1"
+    | not $ IMap.null argMap =
+        error "Destructuring is not supported in the runtime yet"
     | otherwise =
-        OutputManager
-            (fmap V.fromList $
-             V.unfoldr
-                 (\i ->
-                      fmap (, succ i) $
-                      IMap.lookup i argMap <|>
-                      if i > fst (IMap.findMax argMap)
-                          then Nothing
-                          else Just [])
-                 0)
-            (maybe [] V.fromList $ IMap.lookup (-1) unifiedArcsMap)
+        OutputPort $ maybe [] V.fromList $ IMap.lookup (-1) unifiedArcsMap
+      -- this code is for later, if we choose to add destructuring to the runtime
+        -- OutputManager
+        --     (fmap V.fromList $
+        --      V.unfoldr
+        --          (\i ->
+        --               fmap (, succ i) $
+        --               IMap.lookup i argMap <|>
+        --               if i > fst (IMap.findMax argMap)
+        --                   then Nothing
+        --                   else Just [])
+        --          0)
+        --     (maybe [] V.fromList $ IMap.lookup (-1) unifiedArcsMap)
   where
     (argMap, unifiedArcsMap) =
         IMap.partitionWithKey (\k _ -> k > 0) $
         IMap.fromListWith (++) $ fmap (second pure) v
-    
 
-runAlgo :: Typeable a => FunctionDict s -> G.OutGraph -> globalState -> IO a
-runAlgo dict G.OutGraph {..} st = do
+constants :: Map.Map HostExpr Dynamic
+constants = [(HEConst.true, toDyn True)]
+
+runAlgo ::
+       Typeable a
+    => Algorithm globalState a
+    -> globalState
+    -> IO a
+runAlgo (Algorithm G.OutGraph {..} dict) st = do
     stateVar <- newIORef st
     (outMap, funcs) <- foldM f (outputMap, []) operators
     (retSink, Source retSource) <- createStream
@@ -1085,8 +1069,21 @@ runAlgo dict G.OutGraph {..} st = do
         mapM
             (\(op@(G.Operator {..}), ctxArc, inChans) ->
                  let outChans = finalMap Map.! operatorId
+                     operatorCode
+                         | nthNS == (qbNamespace operatorType) =
+                             StreamProcessor $
+                             pure $ do
+                                 input <- recieve 0
+                                 sendUntyped $
+                                     input V.!
+                                     read
+                                         (Str.toString . unwrap $
+                                          qbName operatorType)
+                         | otherwise =
+                             fromMaybe (error $ "cannot find " ++ show operatorType) $
+                             Map.lookup operatorType dict
                      processor =
-                         case dict Map.! operatorType of
+                         case operatorCode of
                              CallSf sfRef -> runFunc sfRef stateVar
                              StreamProcessor processor' -> processor'
                   in (op, ) <$>
@@ -1111,16 +1108,27 @@ runAlgo dict G.OutGraph {..} st = do
         else throwIO $ ExecutionException errors
   where
     outputMap :: Map.Map FnId [(Int, Sink Dynamic)]
-    outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-    f (m, l) op@(G.Operator {operatorType, operatorId}) = do
-        let (ctxInput, inputs) = Map.lookup operatorId argDict
-        (sinks, sources) <- unzip <$> mapM (const createStream) inputs
-        let newMap =
+    outputMap = Map.fromList $ zip (map G.operatorId operators) (repeat [])
+    f (m, l) op@(G.Operator {operatorId}) = do
+        let (ctxInput, inputs) =
+                fromMaybe (Nothing, []) $ Map.lookup operatorId argDict
+        arcs <-
+            forM inputs $ \case
+                G.LocalSource t -> do
+                    (sink, source) <- createStream
+                    pure $ Left ((t, sink), source)
+                G.EnvSource v -> pure $ Right v
+        let mapUpdates = map fst $ lefts arcs
+            inputPorts =
+                map
+                    (either (ArcPort . snd) (ConstValPort . (constants Map.!)))
+                    arcs
+            newMap =
                 foldl
                     (\theMap (G.Target {G.index, G.operator}, chan) ->
                          Map.update (Just . ((index, chan) :)) operator theMap)
                     m
-                    (zip inputs sinks)
+                    mapUpdates
         (newMap', ctxArc) <-
             case ctxInput of
                 Just G.Target {G.index, G.operator} -> do
@@ -1129,27 +1137,19 @@ runAlgo dict G.OutGraph {..} st = do
                         ( Map.update (Just . ((index, sink) :)) operator newMap
                         , Just source)
                 Nothing -> pure (newMap, Nothing)
-        pure (newMap', (op, ctxArc, sources) : l)
-    argDict = fmap partitionArgs $ Map.fromListWith (++) arcs
+        pure (newMap', (op, ctxArc, inputPorts) : l)
+    argDict :: Map.Map FnId (Maybe G.Target, [G.Source HostExpr])
+    argDict = fmap partitionArgs $ Map.fromListWith (++) $ fmap simplifyArc arcs
+    simplifyArc G.Arc {target = G.Target {G.index, G.operator}, source} =
+        (operator, [(index, source)])
     partitionArgs l =
-        ( snd <$> find ((== -1) . fst) l
+        ( (\case
+               G.EnvSource _ -> error "Ctx src with env source makes no sense"
+               G.LocalSource l -> l) .
+          snd <$>
+          find ((== -1) . fst) l
         , map snd $ sortOn fst $ filter ((/= -1) . fst) l)
     
-
--- Inspect the graph
-printGraph :: Algorithm s r -> IO ()
-printGraph (Algorithm gr ret) = do
-    forM_ gr $ \(Node name id_ nt _ vars sfRet) ->
-        let ntStr =
-                case nt of
-                    CallSf _ -> "Sf"
-                    StreamProcessor _ -> "StreamProcessor"
-         in putStrLn $ show name ++ "(" ++ show id_ ++ ") " ++ ntStr ++
-            " with inputs " ++
-            show (map uniqueToInt vars) ++
-            " returns " ++
-            show (uniqueToInt sfRet)
-    putStrLn $ "last return is " ++ show (uniqueToInt ret)
 
 -- Types for the example
 data T =
