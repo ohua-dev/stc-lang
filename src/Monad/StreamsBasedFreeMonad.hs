@@ -125,7 +125,8 @@ import Data.Dynamic2
 import Data.Foldable (fold)
 import Data.IORef
 import Data.Kind
-import Data.List (find, findIndex, nub, sortOn)
+import Data.List (find, findIndex, nub, sortOn, partition)
+import qualified Data.IntMap as IMap
 import Data.Map ((!))
 import qualified Data.Map as Map
 import Data.Maybe
@@ -150,6 +151,8 @@ import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
 import Type.Magic
 import Control.Monad.Loops
+import Control.Applicative
+import Control.Arrow (second)
 
 
 
@@ -221,7 +224,7 @@ data ASTAction globalState a
                             (Var returnType -> a)
     | forall returnType. Typeable returnType =>
                          Generate (ASTM globalState (Var (Maybe returnType)))
-                                  (Var (Generator returnType) -> a)
+                                  (Var (Generator Dynamic) -> a)
 
 -- | The AST Monad
 newtype ASTM globalState a =
@@ -338,7 +341,7 @@ generate ::
        (Typeable a)
     => (ASTM globalState (Var (Maybe a)))
     -> ASTM globalState (Var (Generator a))
-generate f = liftF $ Generate f id
+generate f = call (liftSf (sfm . pure . fmap forceDynamic)) united =<< liftF (Generate f id)
 
 -- | Helper class to make 'call' a multi arity function
 class CollectVars t
@@ -798,8 +801,8 @@ newtype Sink a = Sink
 -- circuiting via 'abortProcessing' which stops the processing.
 newtype StreamM a = StreamM
     { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Source Dynamic)
-                                                    , Vector (Source Dynamic)
-                                                    , Vector (Sink Dynamic)) IO) a
+                                                    , Vector InputPort
+                                                    , OutputManager) IO) a
     } deriving (Functor, Applicative, Monad, MonadIO)
 
 type StreamInit a = StreamM (StreamM a)
@@ -807,11 +810,32 @@ type StreamInit a = StreamM (StreamM a)
 -- | Create a stream with a end that can only be sent to and one that
 -- can only be read from.
 createStream :: IO (Sink a, Source a)
-createStream = (Sink . writeTChan &&& Source . readTChan) <$> atomically newTChan
+createStream =
+    (Sink . writeTChan &&& Source . readTChan) <$> atomically newTChan
 
--- | Send a packet to all output streams
-sendPacket :: Packet Dynamic -> StreamM ()
-sendPacket p = StreamM $ liftIO . atomically . mapM_ (($ p) . unSink) =<< view _3
+getUnifiedPort :: StreamM OutputPort
+getUnifiedPort = StreamM $ unifiedPort <$> view _3
+
+getAllIndexedPorts :: StreamM (V.Vector OutputPort)
+getAllIndexedPorts = StreamM $ indexedPorts <$> view _3
+
+getIndexedPort :: Int -> StreamM OutputPort
+getIndexedPort i = (V.! i) <$> getAllIndexedPorts
+
+sendToPort :: Packet Dynamic -> OutputPort -> StreamM ()
+sendToPort p (OutputPort port)
+    | V.null port = pure ()
+    | otherwise = StreamM $ liftIO $ mapM_ (atomically . ($ p) . unSink) port
+
+-- | Send a packet to all unified output streams
+sendPacketUnified :: Packet Dynamic -> StreamM ()
+sendPacketUnified p = getUnifiedPort >>= sendToPort p
+
+sendPacketToIndexed :: Int -> Packet Dynamic -> StreamM ()
+sendPacketToIndexed i p = getIndexedPort i >>= sendToPort p
+
+sendPacketToAllIndexed :: Packet Dynamic -> StreamM ()
+sendPacketToAllIndexed p = getAllIndexedPorts >>= mapM_ (sendToPort p)
 
 -- | Stop processing immediately. No subsequent actions are performed.
 abortProcessing :: StreamM a
@@ -823,12 +847,20 @@ packetsLeftOverErr = StreamM . throwError . Just
 -- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
 endProcessingAt :: (Int -> Bool) -> StreamM a
 endProcessingAt p = do
-    numChans <- StreamM $ length <$> view _2
-    vals <-
-        mapM (recievePacket <=< getSource) [x | x <- [0 .. numChans - 1], p x]
     sendEOS -- make sure the error of having excess input does not
             -- propagate unnecessarily
-    case findIndex (not . isEOS) vals of
+    results <-
+        getInputPorts >>=
+        V.imapM
+            (\i ->
+                 \case
+                     ConstValPort _ -> pure Nothing
+                     ArcPort s ->
+                         recievePacket s <&> \r ->
+                             if isEOS r
+                                 then Nothing
+                                 else Just i)
+    case foldl (<|>) Nothing results of
         Nothing -> abortProcessing
         Just i
       -- eventually we'll want to send some information here which
@@ -854,13 +886,18 @@ expectFinish :: StreamM a
 expectFinish = closeCtxArc >> endProcessingAt (const True)
 
 sendEOS :: StreamM ()
-sendEOS = sendPacket EndOfStreamPacket
+sendEOS =
+    sendPacketUnified EndOfStreamPacket >>
+    sendPacketToAllIndexed EndOfStreamPacket
 
 recievePacket :: Source a -> StreamM (Packet a)
 recievePacket = StreamM . liftIO . atomically . unSource
 
-getSource :: Int -> StreamM (Source Dynamic)
-getSource i = StreamM $ (V.! i) <$> view _2
+getInputPorts :: StreamM (V.Vector InputPort)
+getInputPorts = StreamM $ view _2
+
+getInputPort :: Int -> StreamM InputPort
+getInputPort i = (V.! i) <$> getInputPorts
 
 recieveUntyped :: Int -> StreamM Dynamic
 recieveUntyped i = getSource i >>= recieveSource (endProcessing i)
@@ -872,13 +909,15 @@ recieveSource finish =
         UserPacket u -> pure u
 
 recieveAllUntyped :: StreamM (Vector Dynamic)
-recieveAllUntyped =
-    StreamM (view _2) >>= V.imapM (\i s -> recieveSource (endProcessing i) s)
+recieveAllUntyped = getInputPorts >>= V.imapM queryPort
+
+queryPort :: Int -> InputPort -> StreamM Dynamic
+queryPort _ (ConstValPort v) = pure v
+queryPort i (ArcPort p) = recieveSource (endProcessing i) p
 
 recieveWhereUntyped :: (Int -> Bool) -> StreamM (Vector Dynamic)
 recieveWhereUntyped p =
-    StreamM (view _2) >>=
-    V.imapM (\i s -> recieveSource (endProcessing i) s) . V.ifilter (const . p)
+    getInputPorts >>= V.imapM queryPort . V.ifilter (const . p)
 
 recieveAll :: Typeable a => StreamM (Vector a)
 recieveAll = fmap forceDynamic <$> recieveAllUntyped
@@ -888,8 +927,7 @@ recieve = fmap forceDynamic . recieveUntyped
 
 verifyInputNum :: Int -> StreamM ()
 verifyInputNum expected =
-    StreamM $
-    (length <$> view _2) >>= \i ->
+    (V.length <$> getInputPorts) >>= \i ->
         if expected == i
             then pure ()
             else error $ "Expected " ++ show expected ++ " got " ++ show i
@@ -945,8 +983,8 @@ runFunc (SfRef (Sf f _) accessor) stTrack =
 mountStreamProcessor ::
        StreamInit ()
     -> Maybe (Source Dynamic)
-    -> Vector (Source Dynamic)
-    -> Vector (Sink Dynamic)
+    -> Vector InputPort
+    -> OutputManager
     -> IO ()
 mountStreamProcessor process ctxInput inputs outputs = do
     result <-
@@ -971,7 +1009,7 @@ mountStreamProcessor process ctxInput inputs outputs = do
             else forever proc_
 
 data ExecutionException =
-    ExecutionException [(QualifiedBinding, FnId, SomeException)]
+    ExecutionException [(G.Operator, SomeException)]
     deriving (Typeable)
 
 prettyExecutionException :: ExecutionException -> String
@@ -990,73 +1028,113 @@ prettyExecutionException (ExecutionException errors) =
         , let opList = nub opSet
         ]
   where
-    showOp (bnd, id_) = show bnd ++ "(" ++ show id_ ++ ")"
+    showOp G.Operator{..} = show operatorType ++ "(" ++ show operatorId ++ ")"
     maxNumExceptionSources = 5
     errMap =
         Map.fromListWith (++) $
-        map (\(bnd, id_, e) -> (show e, [(bnd, id_)])) errors
+        map (\(op, e) -> (show e, [op])) errors
 
 instance Exception ExecutionException
 
 instance Show ExecutionException where
     show = prettyExecutionException
 
-runAlgo :: Typeable a => Algorithm globalState a -> globalState -> IO a
-runAlgo (Algorithm nodes retVar) st = do
+data InputPort = ConstValPort Dynamic | ArcPort (Source Dynamic)
+
+newtype OutputPort = OutputPort (V.Vector (Sink Dynamic))
+
+data OutputManager = OutputManager
+    { indexedPorts :: V.Vector OutputPort
+    , unifiedPort :: OutputPort
+    }
+
+toOutputManager :: [(Int, Sink Dynamic)] -> OutputManager
+toOutputManager v
+    | Just _ <- IMap.lookupLT (-1) unifiedArcsMap =
+        error "Cannot have target index less than -1"
+    | otherwise =
+        OutputManager
+            (fmap V.fromList $
+             V.unfoldr
+                 (\i ->
+                      fmap (, succ i) $
+                      IMap.lookup i argMap <|>
+                      if i > fst (IMap.findMax argMap)
+                          then Nothing
+                          else Just [])
+                 0)
+            (maybe [] V.fromList $ IMap.lookup (-1) unifiedArcsMap)
+  where
+    (argMap, unifiedArcsMap) =
+        IMap.partitionWithKey (\k _ -> k > 0) $
+        IMap.fromListWith (++) $ fmap (second pure) v
+    
+
+runAlgo :: Typeable a => FunctionDict s -> G.OutGraph -> globalState -> IO a
+runAlgo dict G.OutGraph {..} st = do
     stateVar <- newIORef st
-    let outputMap :: Map.Map Unique [Sink Dynamic]
-        outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
-        f (m, l) (Node name id_ func ctxInput inputs oUnique) = do
-            (sinks, sources) <- unzip <$> mapM (const createStream) inputs
-            let newMap =
-                    foldl
-                        (\theMap (u, chan) ->
-                             Map.update (Just . (chan :)) u theMap)
-                        m
-                        (zip inputs sinks)
-            (newMap', ctxArc) <-
-                case ctxInput of
-                    Just src -> do
-                        (sink, source) <- createStream
-                        pure
-                            ( Map.update (Just . (sink :)) src newMap
-                            , Just source)
-                    Nothing -> pure (newMap, Nothing)
-            pure (newMap', (func, id_, name, ctxArc, sources, oUnique) : l)
-    (outMap, funcs) <- foldM f (outputMap, []) nodes
+    (outMap, funcs) <- foldM f (outputMap, []) operators
     (retSink, Source retSource) <- createStream
-    let finalMap = Map.update (Just . (retSink :)) retVar outMap
+    let finalMap =
+            fmap toOutputManager $
+            Map.update
+                (Just . ((G.index returnArc, retSink) :))
+                (G.operator returnArc)
+                outMap
     threads <-
         mapM
-            (\(nt, id_, name, ctxArc, inChans, retUnique :: Unique) ->
-                 let outChans =
-                         fromMaybe (error "return value not found") $
-                         Map.lookup retUnique finalMap
+            (\(op@(G.Operator {..}), ctxArc, inChans) ->
+                 let outChans = finalMap Map.! operatorId
                      processor =
-                         case nt of
+                         case dict Map.! operatorType of
                              CallSf sfRef -> runFunc sfRef stateVar
                              StreamProcessor processor' -> processor'
-                  in (name, id_, ) <$>
+                  in (op, ) <$>
                      async
                          (mountStreamProcessor
                               processor
                               ctxArc
                               (V.fromList inChans)
-                              (V.fromList outChans)))
+                              outChans))
             funcs
     errors <-
         catMaybes <$>
         forM
             threads
-            (\(name, id_, thread) ->
-                 either (Just . (name, id_, )) (const Nothing) <$>
-                 waitCatch thread)
+            (\(op, thread) ->
+                 either (Just . (op, )) (const Nothing) <$> waitCatch thread)
     if null errors
         then do
             UserPacket ret <- atomically retSource
             EndOfStreamPacket <- atomically retSource
             pure $ forceDynamic ret
         else throwIO $ ExecutionException errors
+  where
+    outputMap :: Map.Map FnId [(Int, Sink Dynamic)]
+    outputMap = Map.fromList $ zip (map outputRef nodes) (repeat [])
+    f (m, l) op@(G.Operator {operatorType, operatorId}) = do
+        let (ctxInput, inputs) = Map.lookup operatorId argDict
+        (sinks, sources) <- unzip <$> mapM (const createStream) inputs
+        let newMap =
+                foldl
+                    (\theMap (G.Target {G.index, G.operator}, chan) ->
+                         Map.update (Just . ((index, chan) :)) operator theMap)
+                    m
+                    (zip inputs sinks)
+        (newMap', ctxArc) <-
+            case ctxInput of
+                Just G.Target {G.index, G.operator} -> do
+                    (sink, source) <- createStream
+                    pure
+                        ( Map.update (Just . ((index, sink) :)) operator newMap
+                        , Just source)
+                Nothing -> pure (newMap, Nothing)
+        pure (newMap', (op, ctxArc, sources) : l)
+    argDict = fmap partitionArgs $ Map.fromListWith (++) arcs
+    partitionArgs l =
+        ( snd <$> find ((== -1) . fst) l
+        , map snd $ sortOn fst $ filter ((/= -1) . fst) l)
+    
 
 -- Inspect the graph
 printGraph :: Algorithm s r -> IO ()

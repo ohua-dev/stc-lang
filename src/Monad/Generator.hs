@@ -42,7 +42,7 @@ yield = flip Yield
 -- After having that realization implementing `Monad` and `Applicative` became really easy because you just simply
 -- create a new generator by applying the function and then prepend a recursion of the respective operation (`>>=` or `<*>`)
 
--- You can see the generator in action by runnning the examples at the bottom in ghci with `runGenerator`
+-- You can see the generator in action by running the examples at the bottom in ghci with `runGenerator`
 
 isFinished :: Generator a -> Bool
 isFinished Finished = True
