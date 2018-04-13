@@ -123,6 +123,24 @@ executable streams-based-monad-exe
   build-depends: base, statefulness
   default-language: Haskell2010
 
+executable bf-traverse-ohua
+  hs-source-dirs: test
+  main-is: bf-traverse-ohua.hs
+  default-language: Haskell2010
+  build-depends: base
+               , statefulness
+               , ohua-core
+               , vector
+               , rdtsc
+               , containers
+               , transformers
+               , deepseq
+               , time
+               , split
+               , bytestring
+               , mtl
+  other-modules: Runner
+  
 source-repository head
   type:     git
   location: https://bitbucket.org/nrink/statefulness

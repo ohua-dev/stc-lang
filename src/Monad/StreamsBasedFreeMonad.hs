@@ -19,7 +19,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -126,7 +125,6 @@ import Data.Either (lefts)
 import Data.Foldable (fold)
 import Data.IORef
 import qualified Data.IntMap as IMap
-import Data.Kind
 import Data.List (find, nub, sortOn)
 import qualified Data.Map as Map
 import Data.Maybe
@@ -152,9 +150,6 @@ import Ohua.Util
 import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
 import Type.Magic
-
-
-
 
 
 united :: Lens' s ()
@@ -251,7 +246,7 @@ instance Functor (ASTAction globalState) where
 --
 -- Together with 'InputList' this can be used to decompose function
 -- types
-type family ReturnType (t :: Type) :: Type where
+type family ReturnType (t :: *) :: * where
     ReturnType (a -> b) = ReturnType b
     ReturnType b = b
 
@@ -279,14 +274,14 @@ sfm :: SfMonad s a -> SfMonad s a
 sfm = id
 
 -- | Map a function type by wrapping each argument in a type with kind @* -> *@
-type family MapFnType (f :: Type -> Type) t where
+type family MapFnType (f :: * -> *) t where
     MapFnType f (a -> b) = f a -> MapFnType f b
-    MapFnType _ b = b
+    MapFnType _c b = b
 
 -- | Set the return type of function @f@ to @t@
 type family SetReturnType f t where
     SetReturnType f (a -> b) = a -> SetReturnType f b
-    SetReturnType f _ = f
+    SetReturnType f _c = f
 
 -- | "Call" a stateful function.  This takes a lifted function (see
 -- 'liftSf'), links it with an accessor for the state that this

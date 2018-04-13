@@ -4,6 +4,8 @@
 {-# LANGUAGE StandaloneDeriving  #-}
 {-# LANGUAGE Trustworthy         #-}
 
+{-# LANGUAGE CPP #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.Dynamic
@@ -143,6 +145,10 @@ dynApp f x = case dynApply f x of
              Nothing -> errorWithoutStackTrace ("Type error in dynamic application.\n" ++
                                "Can't apply function " ++ show f ++
                                " to argument " ++ show x)
+
+#if !MIN_VERSION_base(4,9,0)
+errorWithoutStackTrace = error
+#endif
 
 dynTypeRep :: Dynamic -> TypeRep
 dynTypeRep (Dynamic tr _) = tr
