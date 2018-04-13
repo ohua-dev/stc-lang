@@ -13,6 +13,8 @@ import Control.Monad.IO.Class
 import Lens.Micro (lens, Lens')
 import Control.Monad.State (get, put)
 import Data.Functor.Identity
+import Control.Monad.Trans
+import Control.Monad.State
 
 
 main :: IO ()
@@ -81,6 +83,24 @@ basicRuntimeTests =
         , testGroup
               "generator"
               [ testGroup
+                    "basic functions"
+                    [ testCase "iterateState" $ do
+                          let expected = [1..10] >>= \i -> [i .. i + 3]
+                          
+                          let mkReal :: Int -> Generator IO Int
+                              mkReal =
+                                  evalStateT $ forever $ do
+                                      i <- get
+                                      if i == 10
+                                          then lift finish
+                                          else do
+                                              modify succ
+                                              lift [i .. i + 3]
+                          result <- toList $ mkReal (1 :: Int)
+                          print result
+                          assertEqual "" expected result
+                    ]
+              , testGroup
                     "mapping"
                     [ testCase "a single function" $ do
                           let f = (+ 3)
@@ -88,10 +108,10 @@ basicRuntimeTests =
                               flip runOhuaM () $ do
                                   l <- sfConst [0 :: Int .. 10]
                                   call
-                                      (liftSf $ sfm . liftIO . runGenerator)
+                                      (liftSf $ sfm . liftIO . toList)
                                       united =<<
                                       smapGen (simpleLift f) l
-                          assertEqual "" (result :: [Int]) (map f [0 .. 10])
+                          assertEqual "" (map f [0 .. 10]) (result :: [Int])
                     , testCase "a single function with free variables" $ do
                           let f = (+ 3)
                           result <-
@@ -99,33 +119,33 @@ basicRuntimeTests =
                                   l <- sfConst [0 .. 10]
                                   f' <- sfConst f
                                   call
-                                      (liftSf $ sfm . liftIO . runGenerator)
+                                      (liftSf $ sfm . liftIO . toList)
                                       united =<<
                                       smapGen (simpleLift2 ($) f') l
-                          assertEqual "" (result :: [Int]) (map f [0 .. 10])
+                          assertEqual "" (map f [0 .. 10]) (result :: [Int])
                     ]
-              , testGroup
-                    "generating"
-                    [ testCase "generate only" $ do
-                          let l = [1 .. 10]
-                              idLens :: Lens' [Int] [Int] 
-                              idLens = lens id (\_ a ->  a)
-                          result <-
-                              flip runOhuaM l $ do
-                                  g <-
-                                      generate $
-                                      call
-                                          (liftSf $
-                                           sfm $ do
-                                               s <- get
-                                               case s of
-                                                   x:xs -> do
-                                                       put xs
-                                                       pure $ Just x
-                                                   [] -> pure Nothing)
-                                          idLens
-                                  call (liftSf $ sfm . liftIO . runGenerator) united g
-                          assertEqual "lists differ" result l
-                    ]
+              -- , testGroup
+              --       "generating"
+              --       [ testCase "generate only" $ do
+              --             let l = [1 .. 10]
+              --                 idLens :: Lens' [Int] [Int]
+              --                 idLens = lens id (\_ a ->  a)
+              --             result <-
+              --                 flip runOhuaM l $ do
+              --                     g <-
+              --                         generate $
+              --                         call
+              --                             (liftSf $
+              --                              sfm $ do
+              --                                  s <- get
+              --                                  case s of
+              --                                      x:xs -> do
+              --                                          put xs
+              --                                          pure $ Just x
+              --                                      [] -> pure Nothing)
+              --                             idLens
+              --                     call (liftSf $ sfm . liftIO . runGenerator) united g
+              --             assertEqual "lists differ" result l
+              --       ]
               ]
         ]

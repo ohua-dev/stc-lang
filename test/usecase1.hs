@@ -1,4 +1,4 @@
-
+-- | Original source https://github.com/iu-parfunc/lvars/tree/master/archived_old/fhpc13-lvars/benchmarks
 
 import Data.Set
 

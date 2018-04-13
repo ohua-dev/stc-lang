@@ -1,16 +1,33 @@
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE MonadComprehensions    #-}
+{-# LANGUAGE MonadComprehensions #-}
 {-# LANGUAGE MultiParamTypeClasses  #-}
 {-# LANGUAGE TypeFamilies  #-}
-module Monad.Generator where
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DefaultSignatures #-}
+module Monad.Generator
+    ( IsGenerator(..)
+    , liftIO
+    , foldlGenerator
+    , foldlGeneratorT
+    , foldlGenerator_
+    , foldlGeneratorT_
+    , chanToGenerator
+    , foldableGenerator
+    , listGenerator
+    , Generator
+    ) where
 
 import Control.Applicative
 import Control.Arrow
 import Control.Concurrent.MVar
 import Control.Monad.State
 import Data.Tuple
-import GHC.Exts (IsList(..))
+import qualified GHC.Exts (IsList(..))
 import Control.Concurrent.Chan
+import qualified Data.Foldable as F
+import Control.Natural
 
 ------------------------------------------------------------------
 --
@@ -18,105 +35,108 @@ import Control.Concurrent.Chan
 --
 ------------------------------------------------------------------
 
-data Generator a
-  = Finished
-  | Yield (Generator a) a
-  | NeedM (IO (Generator a))
+-- | There are three basic ways to construct this generator, which
+-- correspond to the (not exposed) constructors of this
+-- type. 1. 'finish' this marks the end of a generator, 2. 'yield' is
+-- used to return a value and continue with the computation afterwards
+-- and finally using 'liftIO' you can execute any IO action and then
+-- continue.
+data Generator m a
+    = Finished
+    | Yield (Generator m a)
+            a
+    | NeedM (m (Generator m a))
 
-
--- | Smart constructor for `Yield`
-yield :: a -> Generator a -> Generator a
-yield = flip Yield
-
-
--- At first I implemented all of the `Applicative` and `Monad` functions fully,
--- that is to say with all the recursion down the source generator.
--- I was already suspecting a pattern there, because the recursion for both looked very similar,
--- I just couldn't quite figure it out.
--- When suddenly something *magical* happened.
--- I was looking at `Alternative`, because that instance is needed for `MonadComprehensions`
--- and I was again reminded of just how similar `Alternative` is to `Monoid` and I realized that
--- `Generator` is in fact a `Monoid`. The empty element is `Finished` because it can be appended or prepended to
--- any generator without changing its meaning and `mappend` is simply exhausting the first generator first,
--- followed by the second one.
--- After having that realization implementing `Monad` and `Applicative` became really easy because you just simply
--- create a new generator by applying the function and then prepend a recursion of the respective operation (`>>=` or `<*>`)
+-- At first I implemented all of the `Applicative` and `Monad`
+-- functions fully, that is to say with all the recursion down the
+-- source generator.  I was already suspecting a pattern there,
+-- because the recursion for both looked very similar, I just couldn't
+-- quite figure it out.  When suddenly something *magical* happened.
+-- I was looking at `Alternative`, because that instance is needed for
+-- `MonadComprehensions` and I was again reminded of just how similar
+-- `Alternative` is to `Monoid` and I realized that `Generator` is in
+-- fact a `Monoid`. The empty element is `Finished` because it can be
+-- appended or prepended to any generator without changing its meaning
+-- and `mappend` is simply exhausting the first generator first,
+-- followed by the second one.  After having that realization
+-- implementing `Monad` and `Applicative` became really easy because
+-- you just simply create a new generator by applying the function and
+-- then prepend a recursion of the respective operation (`>>=` or
+-- `<*>`)
 
 -- You can see the generator in action by running the examples at the bottom in ghci with `runGenerator`
 
-isFinished :: Generator a -> Bool
-isFinished Finished = True
-isFinished _ = False
-
-instance Monoid (Generator a) where
+instance Functor m => Monoid (Generator m a) where
   mempty = Finished
   Finished `mappend` gen2 = gen2
   NeedM sc `mappend` gen2 = NeedM $ (`mappend` gen2) <$> sc
   Yield g v `mappend` gen2 = Yield (g `mappend` gen2) v
 
 
-instance Functor Generator where
+instance Functor m => Functor (Generator m) where
   fmap _ Finished    = Finished
   fmap f (NeedM m)   = NeedM $ fmap (fmap f) m
   fmap f (Yield g a) = Yield (fmap f g) (f a)
 
-instance Applicative Generator where
+instance Functor m => Applicative (Generator m) where
   pure = Yield Finished
   Finished <*> _ = Finished
-  NeedM m <*> v = NeedM $ do
-    f <- m
-    pure $ f <*> v
+  NeedM m <*> v = NeedM $ (<*> v) <$> m
   Yield fg f <*> v = fmap f v `mappend` (fg <*> v)
 
-instance Monad Generator where
+instance Functor m => Monad (Generator m) where
   return = pure
   Finished >>= _ = Finished
   NeedM m >>= f = NeedM $ (>>= f) <$> m
   Yield cont a >>= f = f a `mappend` (cont >>= f)
 
 -- | This is needed to get the Monad comprehensions
-instance Alternative Generator where
+instance Functor m => Alternative (Generator m) where
   empty = mempty
   (<|>) = mappend
 
 -- | IO can be embedded easily
-instance MonadIO Generator where
-  liftIO = NeedM . fmap pure
+instance MonadIO m => MonadIO (Generator m) where
+  liftIO = needM . liftIO
 
-instance IsList (Generator a) where
-  type Item (Generator a) = a
+instance Monad m => GHC.Exts.IsList (Generator m a) where
+  type Item (Generator m a) = a
   fromList = listGenerator
-  toList _ = error "toList: need IO to evaluate generator"
-
--- | Run a generator producing a list of output values
-runGenerator :: Generator a -> IO [a]
-runGenerator Finished    = pure []
-runGenerator (NeedM ac)  = ac >>= runGenerator
-runGenerator (Yield g a) = (a:) <$> runGenerator g
+  toList _ = error "toList: need monad to evaluate generator"
 
 
--- | Run until the generator yields its first value or finishes.
--- Returns the created value and a new generator which represents its updated internal state.
-runGeneratorOnce :: Generator a -> IO (Maybe (a, Generator a))
-runGeneratorOnce Finished    = pure Nothing
-runGeneratorOnce (NeedM ac)  = ac >>= runGeneratorOnce
-runGeneratorOnce (Yield g a) = pure $ Just (a, g)
-
-
-foldlGenerator :: MonadIO m => (b -> a -> m b) -> Generator a -> b -> m b
-foldlGenerator ac = go
+foldlGeneratorT ::
+       (IsGenerator g f, Monad m)
+    => (f ~> m)
+    -> (b -> a -> m b)
+    -> b
+    -> g a
+    -> m b
+foldlGeneratorT trans ac = flip go
   where
     go gen seed' =
-        liftIO (runGeneratorOnce gen) >>=
+        trans (step gen) >>=
         maybe (pure seed') (\(a, gen') -> go gen' =<< ac seed' a)
 
-foldlGenerator_ :: MonadIO m => (a -> m ()) -> Generator a -> m ()
-foldlGenerator_ f g = foldlGenerator (\() a -> f a) g ()
+foldlGenerator ::
+       (IsGenerator g m, Monad m) => (b -> a -> m b) -> b -> g a -> m b
+foldlGenerator = foldlGeneratorT id
 
-chanToGenerator :: Chan (Maybe a) -> Generator a
+foldlGeneratorT_ ::
+       (IsGenerator g f, Monad m) => (f ~> m) -> (a -> m ()) -> g a -> m ()
+foldlGeneratorT_ trans f = foldlGeneratorT trans (\() a -> f a) ()
+
+foldlGenerator_ :: (IsGenerator g m, Monad m) => (a -> m ()) -> g a -> m ()
+foldlGenerator_ = foldlGeneratorT_ id
+
+chanToGenerator ::
+       (MonadIO m, IsGenerator g m, Monad g) => Chan (Maybe a) -> g a
 chanToGenerator c = recur
   where
-    recur = NeedM $ maybe Finished (Yield recur) <$> readChan c
+    recur = maybe finish (flip yield recur) =<< needM (liftIO $ readChan c)
+
+foldableGenerator :: (Monad m, Foldable f, IsGenerator g m) => f a -> g a
+foldableGenerator = listGenerator . F.toList
 
 -----------------------------------------------------------------
 --
@@ -126,16 +146,16 @@ chanToGenerator c = recur
 
 
 
-listGenerator :: [a] -> Generator a
-listGenerator []     = Finished
-listGenerator (x:xs) = Yield (listGenerator xs) x
+listGenerator :: IsGenerator g m => [a] -> g a
+listGenerator [] = finish
+listGenerator (x:xs) = yield x $ listGenerator xs
 
 
 -- | A generator crated with this will run until it returns `Nothing` in which case the generator finishes
-stateToGenerator :: StateT s IO (Maybe a) -> s -> Generator a
-stateToGenerator st s = NeedM $ do
-  (a, s') <- runStateT st s
-  pure $ maybe Finished (Yield (stateToGenerator st s')) a
+stateToGenerator :: (Monad g, IsGenerator g m) => StateT s m (Maybe a) -> s -> g a
+stateToGenerator st s = do
+  (a, s') <- needM $ runStateT st s
+  maybe finish (`yield` stateToGenerator st s') a
 
 
 
@@ -147,14 +167,14 @@ stateToGenerator st s = NeedM $ do
 
 -- One fun thing we can do in IO is put the generator in a mutable variable and then just pull values from that.
 
-type GenVar a = MVar (Generator a)
+type GenVar a = MVar (Generator IO a)
 
-mkGenIO :: Generator a -> IO (GenVar a)
+mkGenIO :: Generator IO a -> IO (GenVar a)
 mkGenIO = newMVar
 
 -- | This pulls a new value from this var (if possible) and updates its state
 pull :: GenVar a -> IO (Maybe a)
-pull = flip modifyMVar $ fmap (maybe (Finished, Nothing) (second Just . swap)) . runGeneratorOnce
+pull = flip modifyMVar $ fmap (maybe (Finished, Nothing) (second Just . swap)) . step
 
 
 
@@ -165,14 +185,14 @@ pull = flip modifyMVar $ fmap (maybe (Finished, Nothing) (second Just . swap)) .
 ------------------------------------------------------------------
 
 
-permutations :: Generator (Int, Char)
+permutations :: Generator IO (Int, Char)
 permutations =
   [ (i, c)
   | i <- listGenerator [0..9]
   , c <- listGenerator ['a'..'f']
   ]
 
-nonReflexivePermutations :: Int -> Generator (Int, Int)
+nonReflexivePermutations :: Int -> Generator IO (Int, Int)
 nonReflexivePermutations i =
   [ (a, b)
   | a <- ints
@@ -181,28 +201,29 @@ nonReflexivePermutations i =
   ]
   where ints = listGenerator [0..i]
 
-justSomeStuffWithInts :: Generator Int
-justSomeStuffWithInts = flip stateToGenerator 0 $ do
-  s <- get
-  if s < 100
-    then do
-      modify (+ 4)
-      pure $ Just s
-    else do
-      liftIO $ putStrLn "We have reached 100" -- It can do IO as well ;)
-      pure Nothing
+justSomeStuffWithInts :: Generator IO Int
+justSomeStuffWithInts =
+    flip stateToGenerator 0 $ do
+        s <- get
+        if s < 100
+            then do
+                modify (+ 4)
+                pure $ Just s
+            else do
+                liftIO $ putStrLn "We have reached 100" -- It can do IO as well ;)
+                pure Nothing
 
 
 -- and they are all compatible and can be joined together (and depend on each other)
 
 -- Probably dont run this ... it creates a **lot** of output
-crazy :: Generator (Int, Int, Char)
+crazy :: Generator IO (Int, Int, Char)
 crazy =
-  [ (a + b, a * d, c)
-  | i <- justSomeStuffWithInts
-  , (b, d) <- nonReflexivePermutations i
-  , (a, c) <- permutations
-  ]
+    [ (a + b, a * d, c)
+    | i <- justSomeStuffWithInts
+    , (b, d) <- nonReflexivePermutations i
+    , (a, c) <- permutations
+    ]
 
 
 ------------------------------------------------------------------
@@ -217,12 +238,32 @@ crazy =
 
 
 -- | A generator @g@ that runs in the monad @m@
-class Monad m => IsGenerator g m | g -> m where
-  advance :: g a -> m (Maybe (a, g a))
-  genToList :: g a -> m [a]
-  genToList g = advance g >>= maybe (pure []) (\(a, ng) -> (a:) <$> genToList ng)
+class IsGenerator g m | g -> m where
+    yield :: a -> g a -> g a
+    finish :: g a
+    needM :: m a -> g a
+    isFinished :: g a -> Bool
+    default isFinished :: Eq (g a) =>
+        g a -> Bool
+    isFinished = (== finish)
+    -- | Run until the generator yields its first value or finishes.
+    -- Returns the created value and a new generator which represents its updated internal state.
+    step :: g a -> m (Maybe (a, g a))
+    -- | Run a generator producing a list of output values
+    toList :: g a -> m [a]
+    default toList :: Monad m => g a -> m [a]
+    toList = foldlGenerator (\b a -> pure $ a : b) []
 
 
-instance IsGenerator Generator IO where
-  advance = runGeneratorOnce
-  genToList = runGenerator
+instance Monad m => IsGenerator (Generator m) m where
+    yield = flip Yield
+    finish = Finished
+    needM = NeedM . fmap pure
+    isFinished Finished = True
+    isFinished _ = False
+    step Finished = pure Nothing
+    step (NeedM ac) = ac >>= step
+    step (Yield g a) = pure $ Just (a, g)
+    toList Finished = pure []
+    toList (NeedM ac) = ac >>= toList
+    toList (Yield g a) = (a :) <$> toList g

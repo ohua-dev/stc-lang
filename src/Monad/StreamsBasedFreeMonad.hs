@@ -28,8 +28,8 @@
 
 -- TODO define the API here by exposing it.
 module Monad.StreamsBasedFreeMonad
-    -- ** Data types
-    ( Unique
+    ( -- ** Data types
+      Unique
     , Var
     , SfMonad(..)
     , Sf(..)
@@ -133,6 +133,7 @@ import Data.Maybe
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.Void
+import GHC.Exts (fromList)
 import Lens.Micro
 import Lens.Micro.Mtl
 import Monad.Generator
@@ -224,7 +225,7 @@ data ASTAction globalState a
                             (Var returnType -> a)
     | forall returnType. Typeable returnType =>
                          Generate (ASTM globalState (Var (Maybe returnType)))
-                                  (Var (Generator Dynamic) -> a)
+                                  (Var (Generator IO Dynamic) -> a)
 
 -- | The AST Monad
 newtype ASTM globalState a =
@@ -310,7 +311,7 @@ toVoidVar (Var u) = Var u
 tSmap :: FunctorTaggedBinding []
 tSmap = FunctorTaggedBinding ARefs.smap
 
-tSmapG :: FunctorTaggedBinding Generator
+tSmapG :: FunctorTaggedBinding (Generator IO)
 tSmapG = FunctorTaggedBinding ARefs.smapG
 
 -- | The smap primitive. Applies an ohua program to each value from a
@@ -326,8 +327,8 @@ smap f lref = liftF $ SmapLike tSmap f lref id
 smapGen ::
        (Typeable a, Typeable b)
     => (Var a -> ASTM globalState (Var b))
-    -> Var (Generator a)
-    -> ASTM globalState (Var (Generator b))
+    -> Var (Generator IO a)
+    -> ASTM globalState (Var (Generator IO b))
 smapGen f lref = liftF $ SmapLike tSmapG f lref id
 
 if_ :: Typeable a
@@ -340,19 +341,20 @@ if_ b then_ else_ = liftF $ If b then_ else_ id
 generate ::
        (Typeable a)
     => (ASTM globalState (Var (Maybe a)))
-    -> ASTM globalState (Var (Generator a))
-generate f = call (liftSf (sfm . pure . fmap forceDynamic)) united =<< liftF (Generate f id)
+    -> ASTM globalState (Var (Generator IO a))
+generate f =
+    call (liftSf (sfm . pure . fmap forceDynamic)) united =<<
+    liftF (Generate f id)
 
 -- | Helper class to make 'call' a multi arity function
-class CollectVars t
-  -- | As this class calls itself recursively this whitnesses that
-  -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM
-  -- state (Var r)@
-    where
+class CollectVars t where
+    -- | As this class calls itself recursively this whitnesses that
+    -- @Ret (a -> b) ~ Ret b)@ which in the end is @r@ in @... -> ASTM
+    -- state (Var r)@
     type Ret t
-  -- | This exists becuase we need a whitness that the @state@ type in
-  -- the ASTM continuation is the same as in the ASTM value returned
-  -- by @t@ in the end.
+    -- | This exists becuase we need a whitness that the @state@ type in
+    -- the ASTM continuation is the same as in the ASTM value returned
+    -- by @t@ in the end.
     type GlobalState t
     collectVars ::
            [Var Void] -- ^ The input values
@@ -544,25 +546,28 @@ defaultFunctionDict =
                     void $ recieveUntyped 0
                     withIsAllowed $ send True)
         , ( DFRefs.id
-          , StreamProcessor $
-            pure $ recieveUntyped 0 >>= withIsAllowed . sendUntyped)
+          , StreamProcessor $ do
+                verifyInputNum 1
+                pure $ recieveUntyped 0 >>= withIsAllowed . sendUntyped)
         , ( DFRefs.smapGFun
           , StreamProcessor $
             pure $ do
                 gen <- extractFunctor <$> recieveUntyped 0
-                let gWithFlush =
+                let gWithFlush :: Generator IO (Vector Dynamic)
+                    gWithFlush =
                         fmap (V.fromList . (: [toDyn True])) gen `mappend`
                         [ V.fromList
                               [ toDyn (error "this needs to be dropped" :: ())
                               , toDyn False
                               ]
                         ]
-                withIsAllowed $ foldlGenerator_ send gWithFlush)
+                withIsAllowed $ foldlGeneratorT_ liftIO send gWithFlush)
         , ( DFRefs.collectG
           , StreamProcessor $
             pure $ do
                 l@(x:_) <- whileM (recieve 0) (recieveUntyped 1)
-                sendUntyped $ injectFunctor x $ listGenerator l)
+                sendUntyped $
+                    injectFunctor x $ (fromList l :: Generator IO Dynamic))
         , ( DFRefs.repeat
           , StreamProcessor $ do
                 stateStore <- liftIO $ newMVar Nothing
@@ -618,7 +623,8 @@ defaultFunctionDict =
                         liftIO (takeMVar chanStore) >>= \case
                             Nothing -> do
                                 c <- liftIO newChan
-                                send $ chanToGenerator c
+                                send $
+                                    (chanToGenerator c :: Generator IO Dynamic)
                                 pure $ liftIO . writeChan c
                             Just f -> pure f
                     v <- extractFunctor <$> recieveUntyped 0
