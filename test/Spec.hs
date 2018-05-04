@@ -25,7 +25,9 @@ main =
         [FBM.testSuite, SBM.testSuite, basicRuntimeTests]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
 
+simpleLift :: (Typeable a, Typeable b) => (a -> b) -> Var a -> ASTM s (Var b)
 simpleLift f = call (liftSf $ sfm . pure . f) united
+simpleLift2 :: (Typeable a, Typeable b, Typeable c) => (a -> b -> c) -> Var a -> Var b -> ASTM s (Var c)
 simpleLift2 f = call (liftSf $ \a b -> sfm $ pure $ f a b) united
 
 basicRuntimeTests :: Test

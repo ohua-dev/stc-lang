@@ -28,6 +28,7 @@ import           System.IO.Unsafe (unsafePerformIO)
 import           System.Environment (getEnvironment,getArgs)
 import           System.CPUTime.Rdtsc (rdtsc)
 import           System.CPUTime  (getCPUTime)
+import System.IO
 
 -- For representing graphs
 import qualified Data.Vector as V
@@ -129,6 +130,8 @@ makeMain start_traverse = do
       w_ = 20000 -- Amount of work (iterations of sin)
 
   args <- getArgs
+
+  hPutStrLn stderr $ "Called with arguments: " ++ show args
   
   -- LK: this way of writing the type annotations is the only way I
   -- can get emacs to not think this is a parse error! :(

@@ -550,7 +550,7 @@ defaultFunctionDict =
                 gen <- extractFunctor <$> recieveUntyped 0
                 let gWithFlush :: Generator IO (Vector Dynamic)
                     gWithFlush =
-                        fmap (V.fromList . (: [toDyn True])) gen `mappend`
+                        fmap (V.fromList . (: [toDyn True])) (gen :: Generator IO Dynamic) `mappend`
                         [ V.fromList
                               [ toDyn (error "this needs to be dropped" :: ())
                               , toDyn False
@@ -584,31 +584,31 @@ defaultFunctionDict =
             pure $
             withIsAllowed $
             send =<< (isJust . extractFunctor <$> recieveUntyped 0))
-        , ( DFRefs.ndMerge
-          , StreamProcessor $
-            pure $
-            withIsAllowed $ do
-                let exhaust c =
-                        forever $
-                        withIsAllowed $
-                        recieveSource
-                            (closeCtxArc >>
-                             endProcessingAt (\i -> i /= 1 && i /= 0))
-                            c >>=
-                        send
-                    runOrExhaust _ (UserPacket p) =
-                        send $ (forceDynamic p :: Bool)
-                    runOrExhaust c EndOfStreamPacket = exhaust c
-                p1 <- getInputPort 0
-                p2 <- getInputPort 1
-                case (p1, p2) of
-                    (ArcPort s1@(Source c1), ArcPort s2@(Source c2)) ->
-                        liftIO
-                            (atomically $ (Left <$> c1) `orElse` (Right <$> c2)) >>=
-                        either (runOrExhaust s1) (runOrExhaust s2)
-                    _ ->
-                        error
-                            "Non deterministic merge with constant arcs makes no sense")
+        -- , ( DFRefs.ndMerge
+        --   , StreamProcessor $
+        --     pure $
+        --     withIsAllowed $ do
+        --         let exhaust c =
+        --                 forever $
+        --                 withIsAllowed $
+        --                 recieveSource
+        --                     (closeCtxArc >>
+        --                      endProcessingAt (\i -> i /= 1 && i /= 0))
+        --                     c >>=
+        --                 send
+        --             runOrExhaust _ (UserPacket p) =
+        --                 send $ (forceDynamic p :: Bool)
+        --             runOrExhaust c EndOfStreamPacket = exhaust c
+        --         p1 <- getInputPort 0
+        --         p2 <- getInputPort 1
+        --         case (p1, p2) of
+        --             (ArcPort s1@(Source c1), ArcPort s2@(Source c2)) ->
+        --                 liftIO
+        --                     (atomically $ (Left <$> c1) `orElse` (Right <$> c2)) >>=
+        --                 either (runOrExhaust s1) (runOrExhaust s2)
+        --             _ ->
+        --                 error
+        --                     "Non deterministic merge with constant arcs makes no sense")
         , ( DFRefs.toGen
           , StreamProcessor $ do
                 chanStore <- liftIO $ newMVar Nothing
@@ -754,12 +754,12 @@ isEOS _ = False
 
 -- | A recieve end of a communication channel
 newtype Source a = Source
-    { unSource :: STM (Packet a)
+    { unSource :: IO (Packet a)
     }
 
 -- | A send end of a communication channel
 newtype Sink a = Sink
-    { unSink :: Packet a -> STM ()
+    { unSink :: Packet a -> IO ()
     }
 
 -- | The monad that a stream processor runs in. It has access to a
@@ -778,7 +778,7 @@ type StreamInit a = StreamM (StreamM a)
 -- can only be read from.
 createStream :: IO (Sink a, Source a)
 createStream =
-    (Sink . writeTChan &&& Source . readTChan) <$> atomically newTChan
+    (Sink . writeChan &&& Source . readChan) <$> newChan
 
 -- getUnifiedPort :: StreamM OutputPort
 -- getUnifiedPort = StreamM $ unifiedPort <$> view _3
@@ -795,7 +795,7 @@ getOutputPort = StreamM $ view _3
 sendToPort :: Packet Dynamic -> OutputPort -> StreamM ()
 sendToPort p (OutputPort port)
     | V.null port = pure ()
-    | otherwise = StreamM $ liftIO $ mapM_ (atomically . ($ p) . unSink) port
+    | otherwise = StreamM $ liftIO $ mapM_ (($ p) . unSink) port
 
 sendPacket :: Packet Dynamic -> StreamM ()
 sendPacket p = getOutputPort >>= sendToPort p
@@ -866,7 +866,7 @@ sendEOS = sendPacket EndOfStreamPacket
     -- sendPacketToAllIndexed EndOfStreamPacket
 
 recievePacket :: Source a -> StreamM (Packet a)
-recievePacket = StreamM . liftIO . atomically . unSource
+recievePacket = StreamM . liftIO . unSource
 
 getInputPorts :: StreamM (V.Vector InputPort)
 getInputPorts = StreamM $ view _2
@@ -1103,8 +1103,8 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
                  either (Just . (op, )) (const Nothing) <$> waitCatch thread)
     if null errors
         then do
-            UserPacket ret <- atomically retSource
-            EndOfStreamPacket <- atomically retSource
+            UserPacket ret <- retSource
+            EndOfStreamPacket <- retSource
             pure $ forceDynamic ret
         else throwIO $ ExecutionException errors
   where

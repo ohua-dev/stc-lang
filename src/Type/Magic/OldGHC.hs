@@ -12,11 +12,7 @@ module Type.Magic.OldGHC
 
 import Control.Exception
 import Data.Dynamic2 (Dynamic(..), TypeCastException(..))
-import Data.Maybe
-import Data.Tuple.OneTuple
 import Data.Typeable
-import Debug.Trace
-import GHC.Exts (Any)
 import Unsafe.Coerce
 
 extractFunctor ::
@@ -28,14 +24,15 @@ extractFunctor =
         let (tyCon, tyArgs) = splitTyConApp trl
          in if tyCon == expectedTyCon
                 then case tyArgs of
-                         [tra] -> fmap f l
-                             where f = Dynamic tra
+                         [] -> error "Constructor must be at least of kind * -> *"
+                         types -> fmap f l
+                             where f = Dynamic $ last types
                                    l = unsafeCoerce dl
                          _ ->
                              error $ "Wrong kind for constructor " ++ show tyCon
                 else throw $ TypeCastException expectedTy (mkTyConApp tyCon [])
   where
-    !expectedTy = typeOf (Proxy :: Proxy f)
+    !expectedTy = typeRep (undefined :: Proxy f)
     !expectedTyCon = typeRepTyCon expectedTy
 
 extractList :: Dynamic -> [Dynamic]
@@ -46,10 +43,12 @@ injectFunctor ::
     => Dynamic
     -> f Dynamic
     -> Dynamic
-injectFunctor (Dynamic tra _) l = Dynamic tr $ unsafeCoerce $ fmap unwrap l
+injectFunctor = \(Dynamic tra _) l -> Dynamic (mkTy tra) $ unsafeCoerce $ fmap unwrap l
   where
     unwrap (Dynamic _ v) = v
-    tr = mkTyConApp (typeRepTyCon (typeOf (Proxy :: Proxy f))) [tra]
+    !targetTyRep = typeRep (undefined :: Proxy f)
+    !(!con, !args) = splitTyConApp targetTyRep
+    mkTy tra = mkTyConApp con (args++[tra])
 
 injectList :: [Dynamic] -> Dynamic
 injectList [] = error "Cannot convert empty list yet"
