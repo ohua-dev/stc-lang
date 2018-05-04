@@ -25,6 +25,7 @@ library
                        , Data.StateElement
                        , Type.Magic
                        , Monad.Generator
+                       , Control.Monad.Par.Scheds.TraceDebuggable
   if impl(ghc >= 8.2.0)
     other-modules:       Type.Magic.GHC8
   else

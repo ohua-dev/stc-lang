@@ -28,6 +28,7 @@ import           Control.Arrow           (first)
 import           Control.Monad.Par.Class as PC
 import           Control.Monad.Par.IO    as PIO
 import           Control.Monad.State     as S
+import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
 --
 -- for debugging only:
 -- import Debug.Scheduler as P
@@ -233,7 +234,7 @@ getState :: (ParFuture ivar m) => ivar s -> m s
 getState = PC.get -- will wait for the value
 
 runOhuaM :: (NFData a) => OhuaM a -> [S] -> IO (a,[S])
-runOhuaM comp initialState = PIO.runParIO $ do
+runOhuaM comp initialState = TDB.runParIO $ do
   inState <- mapM PC.newFull initialState
   outState <- forM initialState $ const PC.new
   (result, _) <- runOhua comp $ GlobalState inState outState Set.empty
