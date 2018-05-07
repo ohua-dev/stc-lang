@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
-             ExistentialQuantification #-}
+             ExistentialQuantification, FlexibleContexts #-}
 module Control.Monad.Par.Scheds.TraceDebuggable where
 
 import Control.Monad.Par
@@ -15,6 +15,7 @@ import Control.Exception
 import System.IO
 import Control.Monad.IO.Class
 import GHC.Stack
+import Ohua.Util
 
 
 

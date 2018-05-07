@@ -2,6 +2,7 @@
 module CorrectnessFuturesBasedMonad where
 
 import Control.Monad.State
+import Control.Exception
 
 import Test.HUnit hiding (State)
 import Test.Framework
@@ -60,6 +61,10 @@ smapResultUsed v = do
   r3 <- liftWithIndex 4 foo $ r2 !! 0
   r4 <- liftWithIndex 5 bar $ r2 !! 1
   return (r3,r4)
+
+smapOverEmptyList = do
+  r1 <- smap simpleComposition []
+  smap simpleComposition [length r1]
 
 simpleCompositionPackaged v = do
   c <- return v
@@ -180,6 +185,11 @@ notEnoughStateTest = do
   assertEqual "result was wrong." 36 result
   assertEqual "state was wrong." [2,3] (map fromS s :: [Int])
 
+smapHandlesEmptyList :: Assertion
+smapHandlesEmptyList =
+    void (runOhuaM smapOverEmptyList (map toS [0 .. 4 :: Int])) `catch` \ErrorCall {} ->
+        assertFailure "Exception was thrown" 
+  
 
 testSuite :: Test.Framework.Test
 testSuite =
@@ -190,6 +200,7 @@ testSuite =
         , testCase "checking simple pipe smap" pipeSMapTest
         , testCase "checking smap with context" smapContextTest
         , testCase "checking smap result used" smapResultUsedTest
+        , testCase "smap over empty list" smapHandlesEmptyList
         , testCase "checking packaged version" packagedBindTest
         , testCase "checking case statement" caseTest
         , testCase "checking smap-case composition" caseSmapTest
