@@ -144,7 +144,7 @@ foldableGenerator :: (Foldable f, IsGenerator g m) => f a -> g a
 foldableGenerator = foldr' (\a rest -> yield a rest) finish
 
 foldableGeneratorEval :: (Foldable f, IsGenerator g m) => (forall b . a -> b -> b) -> f a -> g a
-foldableGeneratorEval eval = foldr' (\a rest -> a `eval` yield a rest) finish
+foldableGeneratorEval eval = foldr (\a rest -> a `eval` yield a rest) finish
 
 foldableGenerator' :: (Foldable f, IsGenerator g m) => f a -> g a
 foldableGenerator' = foldableGeneratorEval seq
