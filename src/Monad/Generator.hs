@@ -15,6 +15,9 @@ module Monad.Generator
     , foldlGeneratorT_
     , chanToGenerator
     , foldableGenerator
+    , foldableGenerator'
+    , foldableGenerator''
+    , foldableGeneratorEval
     , listGenerator
     , Generator
     ) where
@@ -28,6 +31,8 @@ import qualified GHC.Exts (IsList(..))
 import Control.Concurrent.Chan
 import qualified Data.Foldable as F
 import Control.Natural
+import Control.DeepSeq
+import Data.Foldable (foldr')
 
 ------------------------------------------------------------------
 --
@@ -135,8 +140,18 @@ chanToGenerator c = recur
   where
     recur = maybe finish (flip yield recur) =<< needM (liftIO $ readChan c)
 
-foldableGenerator :: (Monad m, Foldable f, IsGenerator g m) => f a -> g a
-foldableGenerator = listGenerator . F.toList
+foldableGenerator :: (Foldable f, IsGenerator g m) => f a -> g a
+foldableGenerator = foldr' (\a rest -> yield a rest) finish
+
+foldableGeneratorEval :: (Foldable f, IsGenerator g m) => (forall b . a -> b -> b) -> f a -> g a
+foldableGeneratorEval eval = foldr' (\a rest -> a `eval` yield a rest) finish
+
+foldableGenerator' :: (Foldable f, IsGenerator g m) => f a -> g a
+foldableGenerator' = foldableGeneratorEval seq
+
+foldableGenerator'' :: (Foldable f, IsGenerator g m, NFData a) => f a -> g a
+foldableGenerator'' = foldableGeneratorEval deepseq
+
 
 -----------------------------------------------------------------
 --
@@ -147,8 +162,7 @@ foldableGenerator = listGenerator . F.toList
 
 
 listGenerator :: IsGenerator g m => [a] -> g a
-listGenerator [] = finish
-listGenerator (x:xs) = yield x $ listGenerator xs
+listGenerator = foldableGenerator
 
 
 -- | A generator crated with this will run until it returns `Nothing` in which case the generator finishes
