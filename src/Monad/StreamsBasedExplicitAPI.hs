@@ -9,6 +9,7 @@ import           Data.Typeable
 import           Lens.Micro
 import           Monad.StreamsBasedFreeMonad
 
+import Control.Monad.Stream
 
 -- maps the StreamsBasedFreeMonad implementation to the explicit API.
 
@@ -48,5 +49,5 @@ lift4WithIndex gsIdx fn = call (liftSf f) $ arrayAccess gsIdx
     f x y z = SfMonad . fn x y z
 
 
-runOhuaM :: (Typeable a) => ASTM s (Var a) -> s -> IO a
-runOhuaM comp s = flip runAlgo s =<< createAlgo comp
+runOhuaM :: (Typeable a, MonadStream m) => ASTM s (Var a) -> s -> m a
+runOhuaM comp s = flip runAlgo s =<< liftIO (createAlgo comp)

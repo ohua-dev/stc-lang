@@ -1,6 +1,6 @@
 
 
 import           Monad.StreamsBasedFreeMonad
+import Control.Monad.Stream.Chan
 
-
-main = print =<< flip runAlgo 0 =<< algorithm
+main = print =<< runChanM . flip runAlgo 0 =<< algorithm

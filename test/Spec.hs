@@ -5,7 +5,7 @@ import CorrectnessFuturesBasedMonad as FBM
 import CorrectnessStreamsBasedMonad as SBM
 import Data.Typeable
 import Monad.Generator
-import Monad.StreamsBasedExplicitAPI
+import Monad.StreamsBasedExplicitAPI as API
 import Monad.StreamsBasedFreeMonad
 import Test.Framework.Providers.HUnit
 import Test.HUnit hiding (Test)
@@ -15,6 +15,9 @@ import Control.Monad.State (get, put)
 import Data.Functor.Identity
 import Control.Monad.Trans
 import Control.Monad.State
+
+import Control.Monad.Stream.Chan
+import Control.Monad.Stream.Par
 
 
 main :: IO ()
@@ -69,7 +72,7 @@ basicRuntimeTests =
                         flip runOhuaM () $
         --v <- sfConst 8
                          do
-                            l <- sfConst [0 .. 30]
+                            l <- sfConst [0 .. 30 :: Int]
                             flip smap l $ \i -> do
                                 cond <- simpleLift (\i -> i `mod` 3 == 0) i
                                 if_ cond (pure i) (sfConst 8)
@@ -151,3 +154,5 @@ basicRuntimeTests =
               --       ]
               ]
         ]
+  where
+    runOhuaM a s = runChanM $ API.runOhuaM a s 

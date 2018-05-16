@@ -59,10 +59,7 @@ module Monad.StreamsBasedFreeMonad
     , runAlgo
     -- ** The stream monad
     , Packet
-    , Source
-    , Sink
     , StreamM
-    , createStream
     , StreamInit
     , sendPacket
     , abortProcessing
@@ -151,6 +148,9 @@ import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
 import Type.Magic
 
+import Control.Monad.Stream (MonadStream, Reciever, Sender)
+import qualified Control.Monad.Stream as ST
+import Control.Monad.Stream.Chan
 
 united :: Lens' s ()
 united f s = const s <$> f ()
@@ -377,29 +377,29 @@ data SfRef globalState =
 -- | This governs how a node is embedded.
 -- Either a stateful function, which gets wrapped, or a stream processor which is
 -- more powerful and does its own dataflow processing.
-data NodeType globalState
+data NodeType globalState m
     = CallSf (SfRef globalState)
-    | StreamProcessor (StreamInit ())
+    | StreamProcessor (StreamInit m ())
 
-data Node globalState = Node
+data Node globalState m = Node
     { nodeDescription :: QualifiedBinding
     , nodeId :: FnId
-    , nodeType :: NodeType globalState
+    , nodeType :: NodeType m globalState
     , ctxRef :: Maybe Unique
     , inputRefs :: [Unique]
     , outputRef :: Unique
     }
 
-data Algorithm globalState a =
+data Algorithm globalState m a =
     Algorithm G.OutGraph
-              (FunctionDict globalState)
+              (FunctionDict globalState m)
 
-type FunctionDict s = Map.Map QualifiedBinding (NodeType s)
+type FunctionDict s m = Map.Map QualifiedBinding (NodeType s m)
 
 type UDict = Map.Map Unique Binding
 
-newtype EvalASTM s a =
-    EvalASTM (RWS () (Mutator L.Expression) ( FunctionDict s
+newtype EvalASTM s m a =
+    EvalASTM (RWS () (Mutator L.Expression) ( FunctionDict s m
                                             , UDict
                                             , NameGenerator
                                             , NameGenerator
@@ -409,10 +409,13 @@ newtype EvalASTM s a =
 class FreshUnique m where
     freshUnique :: m Unique
 
-instance FreshUnique (EvalASTM s) where
+instance FreshUnique (EvalASTM s m) where
     freshUnique = EvalASTM $ (_5 %= succ) >> use _5
 
-evalASTM :: EvalASTM s a -> (FunctionDict s, L.Expression -> L.Expression, a)
+evalASTM ::
+       MonadStream m
+    => EvalASTM s m a
+    -> (FunctionDict s m, L.Expression -> L.Expression, a)
 evalASTM (EvalASTM ac) = (d, m, a)
   where
     throwErrs = either (error . Str.toString) id
@@ -426,21 +429,21 @@ evalASTM (EvalASTM ac) = (d, m, a)
             , throwErrs $ initNameGen mempty
             , Unique 0)
 
-instance MonadGenBnd (EvalASTM s) where
+instance MonadGenBnd (EvalASTM s m) where
     generateBinding = EvalASTM $ generateBindingIn _3
     generateBindingWith = EvalASTM . generateBindingWithIn _3
 
-generateSFunctionName :: EvalASTM s QualifiedBinding
+generateSFunctionName :: EvalASTM s m QualifiedBinding
 generateSFunctionName =
     EvalASTM $ QualifiedBinding ["__generated"] <$> generateBindingIn _4
 
 -- | Evaluate the AST Monad and ceate a graph
-createAlgo :: ASTM s (Var a) -> IO (Algorithm s a)
+createAlgo :: MonadStream m => ASTM s (Var a) -> IO (Algorithm s m a)
 createAlgo astm = flip Algorithm dict <$> runCompiler expr
   where
     (dict, expr) = evaluateAST astm
 
-registerFunction :: NodeType s -> EvalASTM s QualifiedBinding
+registerFunction :: NodeType s m -> EvalASTM s m QualifiedBinding
 registerFunction n = do
     name <-
         case n of
@@ -449,12 +452,12 @@ registerFunction n = do
     EvalASTM $ _1 . at name .= Just n
     pure name
 
-varToBnd :: Var a -> EvalASTM s Binding
+varToBnd :: Var a -> EvalASTM s m Binding
 varToBnd (Var u) =
     EvalASTM $ fromMaybe (error "bindings must be defined before use") <$>
     preuse (_2 . ix u)
 
-mkRegVar :: EvalASTM s (Var a, Binding)
+mkRegVar :: EvalASTM s m (Var a, Binding)
 mkRegVar = do
     b <- generateBinding
     u <- freshUnique
@@ -474,7 +477,7 @@ dN i = QualifiedBinding nthNS (makeThrow $ Str.showS i)
 captureSingleton :: QualifiedBinding
 captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
 
-defaultFunctionDict :: FunctionDict s
+defaultFunctionDict :: MonadStream m => FunctionDict s m
 defaultFunctionDict =
     Map.fromList $
     ( captureSingleton
@@ -631,10 +634,10 @@ defaultFunctionDict =
                             else Just currGeneratorChan)
         ]
 
-evaluateAST :: ASTM s (Var a) -> (FunctionDict s, L.Expression)
+evaluateAST :: MonadStream m => ASTM s (Var a) -> (FunctionDict s m, L.Expression)
 evaluateAST (ASTM m) = (dict, build e)
   where
-    evalInner :: ASTM s (Var a) -> EvalASTM s L.Expression
+    evalInner :: MonadStream m => ASTM s (Var a) -> EvalASTM s m L.Expression
     evalInner (ASTM inner) = do
         (e', Mutator build') <- censor (const mempty) $ listen $ iterM go inner
         build' . L.Var . L.Local <$> varToBnd e'
@@ -643,7 +646,7 @@ evaluateAST (ASTM m) = (dict, build e)
             v <- iterM go m
             L.Apply (L.Var (L.Sf captureSingleton Nothing)) . L.Var . L.Local <$>
                 varToBnd v
-    go :: ASTAction s (EvalASTM s (Var a)) -> EvalASTM s (Var a)
+    go :: MonadStream m => ASTAction s (EvalASTM s m (Var a)) -> EvalASTM s m (Var a)
     go (InvokeSf sf tag vars cont) = do
         n <- registerFunction (CallSf $ SfRef sf tag)
         (rv, rb) <- mkRegVar
@@ -752,33 +755,21 @@ isEOS :: Packet a -> Bool
 isEOS EndOfStreamPacket = True
 isEOS _ = False
 
--- | A recieve end of a communication channel
-newtype Source a = Source
-    { unSource :: IO (Packet a)
-    }
-
--- | A send end of a communication channel
-newtype Sink a = Sink
-    { unSink :: Packet a -> IO ()
-    }
 
 -- | The monad that a stream processor runs in. It has access to a
 -- number of input streams to pull from and a number of output streams
 -- to send to.  Additionally IO is enabled with 'MonadIO' and a short
 -- circuiting via 'abortProcessing' which stops the processing.
-newtype StreamM a = StreamM
-    { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Source Dynamic)
-                                                    , Vector InputPort
-                                                    , OutputPort) IO) a
+newtype StreamM m a = StreamM
+    { runStreamM :: ExceptT (Maybe String) (ReaderT ( Maybe (Reciever m (Packet Dynamic))
+                                                    , Vector (InputPort m)
+                                                    , OutputPort m) m) a
     } deriving (Functor, Applicative, Monad, MonadIO)
 
-type StreamInit a = StreamM (StreamM a)
+type StreamInit m a = StreamM m (StreamM m a)
 
--- | Create a stream with a end that can only be sent to and one that
--- can only be read from.
-createStream :: IO (Sink a, Source a)
-createStream =
-    (Sink . writeChan &&& Source . readChan) <$> newChan
+instance MonadTrans StreamM where
+  lift = StreamM . lift . lift
 
 -- getUnifiedPort :: StreamM OutputPort
 -- getUnifiedPort = StreamM $ unifiedPort <$> view _3
@@ -789,15 +780,15 @@ createStream =
 -- getIndexedPort :: Int -> StreamM OutputPort
 -- getIndexedPort i = (V.! i) <$> getAllIndexedPorts
 
-getOutputPort :: StreamM OutputPort
+getOutputPort :: Monad m => StreamM m (OutputPort m)
 getOutputPort = StreamM $ view _3
 
-sendToPort :: Packet Dynamic -> OutputPort -> StreamM ()
+sendToPort :: MonadStream m => Packet Dynamic -> OutputPort m -> StreamM m ()
 sendToPort p (OutputPort port)
     | V.null port = pure ()
-    | otherwise = StreamM $ liftIO $ mapM_ (($ p) . unSink) port
+    | otherwise = lift $ mapM_ (ST.send p) port
 
-sendPacket :: Packet Dynamic -> StreamM ()
+sendPacket :: MonadStream m => Packet Dynamic -> StreamM m ()
 sendPacket p = getOutputPort >>= sendToPort p
 
 -- | Send a packet to all unified output streams
@@ -811,14 +802,14 @@ sendPacket p = getOutputPort >>= sendToPort p
 -- sendPacketToAllIndexed p = getAllIndexedPorts >>= mapM_ (sendToPort p)
 
 -- | Stop processing immediately. No subsequent actions are performed.
-abortProcessing :: StreamM a
+abortProcessing :: Monad m => StreamM m a
 abortProcessing = StreamM (throwError Nothing)
 
-packetsLeftOverErr :: String -> StreamM a
+packetsLeftOverErr :: Monad m => String -> StreamM m a
 packetsLeftOverErr = StreamM . throwError . Just
 
 -- | This can be used to gracefully end processing after an 'EndOfStreamPacket'
-endProcessingAt :: (Int -> Bool) -> StreamM a
+endProcessingAt :: MonadStream m => (Int -> Bool) -> StreamM m a
 endProcessingAt p = do
     sendEOS -- make sure the error of having excess input does not
             -- propagate unnecessarily
@@ -842,11 +833,11 @@ endProcessingAt p = do
       -- port had data left over in it
          -> packetsLeftOverErr (show i)
 
-withCtxArc :: StreamM a -> (Source Dynamic -> StreamM a) -> StreamM a
+withCtxArc :: Monad m => StreamM m a -> (Reciever m (Packet Dynamic) -> StreamM m a) -> StreamM m a
 withCtxArc failAction succeedAction =
     StreamM (view _1) >>= maybe failAction succeedAction
 
-closeCtxArc :: StreamM ()
+closeCtxArc :: MonadStream m => StreamM m ()
 closeCtxArc =
     withCtxArc (pure ()) $ \arc -> do
         ret <- recievePacket arc
@@ -854,53 +845,53 @@ closeCtxArc =
             then pure ()
             else packetsLeftOverErr "ctx arc"
 
-endProcessing :: Int -> StreamM a
+endProcessing :: MonadStream m => Int -> StreamM m a
 endProcessing i = closeCtxArc >> endProcessingAt (/= i)
 
-expectFinish :: StreamM a
+expectFinish :: MonadStream m => StreamM m a
 expectFinish = closeCtxArc >> endProcessingAt (const True)
 
-sendEOS :: StreamM ()
+sendEOS :: MonadStream m => StreamM m ()
 sendEOS = sendPacket EndOfStreamPacket
     -- sendPacketUnified EndOfStreamPacket >>
     -- sendPacketToAllIndexed EndOfStreamPacket
 
-recievePacket :: Source a -> StreamM (Packet a)
-recievePacket = StreamM . liftIO . unSource
+recievePacket :: MonadStream m => Reciever m (Packet a) -> StreamM m (Packet a)
+recievePacket = lift . ST.recieve
 
-getInputPorts :: StreamM (V.Vector InputPort)
+getInputPorts :: Monad m => StreamM m (V.Vector (InputPort m))
 getInputPorts = StreamM $ view _2
 
-getInputPort :: Int -> StreamM InputPort
+getInputPort :: Monad m => Int -> StreamM m (InputPort m)
 getInputPort i = (V.! i) <$> getInputPorts
 
-recieveUntyped :: Int -> StreamM Dynamic
+recieveUntyped :: MonadStream m => Int -> StreamM m Dynamic
 recieveUntyped i = getInputPort i >>= queryPort i
 
-recieveSource :: StreamM a -> Source a -> StreamM a
+recieveSource :: MonadStream m => StreamM m a -> Reciever m (Packet a) -> StreamM m a
 recieveSource finish =
     recievePacket >=> \case
         EndOfStreamPacket -> finish
         UserPacket u -> pure u
 
-recieveAllUntyped :: StreamM (Vector Dynamic)
+recieveAllUntyped :: MonadStream m => StreamM m (Vector Dynamic)
 recieveAllUntyped = getInputPorts >>= V.imapM queryPort
 
-queryPort :: Int -> InputPort -> StreamM Dynamic
+queryPort :: MonadStream m => Int -> InputPort m -> StreamM m Dynamic
 queryPort _ (ConstValPort v) = pure v
 queryPort i (ArcPort p) = recieveSource (endProcessing i) p
 
-recieveWhereUntyped :: (Int -> Bool) -> StreamM (Vector Dynamic)
+recieveWhereUntyped :: MonadStream m => (Int -> Bool) -> StreamM m (Vector Dynamic)
 recieveWhereUntyped p =
     getInputPorts >>= V.imapM queryPort . V.ifilter (const . p)
 
-recieveAll :: Typeable a => StreamM (Vector a)
+recieveAll :: (Typeable a, MonadStream m) => StreamM m (Vector a)
 recieveAll = fmap forceDynamic <$> recieveAllUntyped
 
-recieve :: Typeable a => Int -> StreamM a
+recieve :: (Typeable a, MonadStream m) => Int -> StreamM m a
 recieve = fmap forceDynamic . recieveUntyped
 
-verifyInputNum :: Int -> StreamM ()
+verifyInputNum :: Monad m => Int -> StreamM m ()
 verifyInputNum expected =
     (V.length <$> getInputPorts) >>= \i ->
         if expected == i
@@ -908,13 +899,13 @@ verifyInputNum expected =
             else error $ "Expected " ++ show expected ++ " got " ++ show i
 
 -- TODO make this type safe at some point
-send :: Typeable a => a -> StreamM ()
+send :: (Typeable a, MonadStream m) => a -> StreamM m ()
 send = sendUntyped . toDyn
 
-sendUntyped :: Dynamic -> StreamM ()
+sendUntyped :: MonadStream m => Dynamic -> StreamM m ()
 sendUntyped = sendPacket . UserPacket
 
-withIsAllowed :: StreamM () -> StreamM ()
+withIsAllowed :: MonadStream m => StreamM m () -> StreamM m ()
 withIsAllowed ac =
     withCtxArc ac $ \arc -> do
         b <- forceDynamic <$> recieveSource (endProcessingAt (const True)) arc
@@ -939,7 +930,7 @@ instance ApplyVars (SfMonad state retType) where
 
 -- | Given a reference for a stateful function run it as a stream
 -- processor
-runFunc :: SfRef globalState -> IORef globalState -> StreamInit ()
+runFunc :: MonadStream m => SfRef globalState -> IORef globalState -> StreamInit m ()
 runFunc (SfRef (Sf f _) accessor) stTrack =
     pure $ do
         inVars <- recieveAllUntyped
@@ -956,11 +947,12 @@ runFunc (SfRef (Sf f _) accessor) stTrack =
 
 -- Running the stream
 mountStreamProcessor ::
-       StreamInit ()
-    -> Maybe (Source Dynamic)
-    -> Vector InputPort
-    -> OutputPort
-    -> IO ()
+       MonadStream m
+    => StreamInit m ()
+    -> Maybe (Reciever m (Packet Dynamic))
+    -> Vector (InputPort m)
+    -> OutputPort m
+    -> m ()
 mountStreamProcessor process ctxInput inputs outputs = do
     result <-
         runReaderT
@@ -1014,16 +1006,19 @@ instance Exception ExecutionException
 instance Show ExecutionException where
     show = prettyExecutionException
 
-data InputPort = ConstValPort Dynamic | ArcPort (Source Dynamic)
+data InputPort m
+    = ConstValPort Dynamic
+    | ArcPort (Reciever m (Packet Dynamic))
 
-newtype OutputPort = OutputPort (V.Vector (Sink Dynamic))
+newtype OutputPort m =
+    OutputPort (V.Vector (Sender m (Packet Dynamic)))
 
 -- data OutputManager = OutputManager
 --     { indexedPorts :: V.Vector OutputPort
 --     , unifiedPort :: OutputPort
 --     }
 
-toOutputManager :: [(Int, Sink Dynamic)] -> OutputPort
+toOutputManager :: [(Int, Sender m (Packet Dynamic))] -> OutputPort m
 toOutputManager v
     | Just _ <- IMap.lookupLT (-1) unifiedArcsMap =
         error "Cannot have target index less than -1"
@@ -1052,63 +1047,53 @@ constants :: Map.Map HostExpr Dynamic
 constants = [(HEConst.true, toDyn True)]
 
 runAlgo ::
-       Typeable a
-    => Algorithm globalState a
+       forall m a globalState. (MonadStream m, Typeable a)
+    => Algorithm globalState m a
     -> globalState
-    -> IO a
+    -> m a
 runAlgo (Algorithm G.OutGraph {..} dict) st = do
-    stateVar <- newIORef st
+    stateVar <- liftIO $ newIORef st
     (outMap, funcs) <- foldM f (outputMap, []) operators
-    (retSink, Source retSource) <- createStream
+    (retSink, retSource) <- ST.createStream
     let finalMap =
             fmap toOutputManager $
             Map.update
                 (Just . ((G.index returnArc, retSink) :))
                 (G.operator returnArc)
                 outMap
-    threads <-
-        mapM
-            (\(op@(G.Operator {..}), ctxArc, inChans) ->
-                 let outChans = finalMap Map.! operatorId
-                     operatorCode
-                         | nthNS == (qbNamespace operatorType) =
-                             StreamProcessor $
-                             pure $ do
-                                 input <- recieve 0
-                                 sendUntyped $
-                                     input V.!
-                                     read
-                                         (Str.toString . unwrap $
-                                          qbName operatorType)
-                         | otherwise =
-                             fromMaybe (error $ "cannot find " ++ show operatorType) $
-                             Map.lookup operatorType dict
-                     processor =
-                         case operatorCode of
-                             CallSf sfRef -> runFunc sfRef stateVar
-                             StreamProcessor processor' -> processor'
-                  in (op, ) <$>
-                     async
-                         (mountStreamProcessor
-                              processor
-                              ctxArc
-                              (V.fromList inChans)
-                              outChans))
-            funcs
-    errors <-
-        catMaybes <$>
-        forM
-            threads
-            (\(op, thread) ->
-                 either (Just . (op, )) (const Nothing) <$> waitCatch thread)
-    if null errors
-        then do
-            UserPacket ret <- retSource
-            EndOfStreamPacket <- retSource
-            pure $ forceDynamic ret
-        else throwIO $ ExecutionException errors
+    mapM_
+        (\(op@(G.Operator {..}), ctxArc, inChans) ->
+             let outChans = finalMap Map.! operatorId
+                 operatorCode
+                     | nthNS == (qbNamespace operatorType) =
+                         StreamProcessor $
+                         pure $ do
+                             input <- recieve 0
+                             sendUntyped $
+                                 input V.!
+                                 read
+                                     (Str.toString . unwrap $
+                                      qbName operatorType)
+                     | otherwise =
+                         fromMaybe (error $ "cannot find " ++ show operatorType) $
+                         Map.lookup operatorType dict
+                 processor =
+                     case operatorCode of
+                         CallSf sfRef -> runFunc sfRef stateVar
+                         StreamProcessor processor' -> processor'
+              in (op, ) <$>
+                 ST.spawn
+                     (mountStreamProcessor
+                          processor
+                          ctxArc
+                          (V.fromList inChans)
+                          outChans))
+        funcs
+    UserPacket ret <- ST.recieve retSource
+    EndOfStreamPacket <- ST.recieve retSource
+    pure $ forceDynamic ret
   where
-    outputMap :: Map.Map FnId [(Int, Sink Dynamic)]
+    outputMap :: Map.Map FnId [(Int, Sender m (Packet Dynamic))]
     outputMap = Map.fromList $ zip (map G.operatorId operators) (repeat [])
     f (m, l) op@(G.Operator {operatorId}) = do
         let (ctxInput, inputs) =
@@ -1116,14 +1101,14 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
         arcs <-
             forM inputs $ \case
                 G.LocalSource t -> do
-                    (sink, source) <- createStream
+                    (sink, source) <- ST.createStream
                     pure $ Left ((t, sink), source)
                 G.EnvSource v -> pure $ Right v
         let mapUpdates = map fst $ lefts arcs
             inputPorts =
                 map
                     (either (ArcPort . snd) (ConstValPort . (constants Map.!)))
-                    arcs
+                    (arcs :: [Either ((G.Target, Sender m (Packet Dynamic)), Reciever m (Packet Dynamic)) HostExpr])
             newMap =
                 foldl
                     (\theMap (G.Target {G.index, G.operator}, chan) ->
@@ -1133,7 +1118,7 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
         (newMap', ctxArc) <-
             case ctxInput of
                 Just G.Target {G.index, G.operator} -> do
-                    (sink, source) <- createStream
+                    (sink, source) <- ST.createStream
                     pure
                         ( Map.update (Just . ((index, sink) :)) operator newMap
                         , Just source)
@@ -1197,9 +1182,9 @@ sfConst a = call (liftSf (sfm $ pure a)) stag
 gt :: (Typeable a, Ord a) => Var a -> Var a -> ASTM s (Var Bool)
 gt = call (liftSf (\a b -> sfm $ pure $ a > b)) stag
 
-algorithm :: IO (Algorithm Int [Int])
-algorithm =
-    createAlgo $ do
+algorithm :: MonadStream m => IO (Algorithm Int m [Int])
+algorithm = 
+    createAlgo  (do
         var1 <- sf1
         var3 <- sf2 var1
         var2 <- sfConst 3
@@ -1210,4 +1195,4 @@ algorithm =
                          isGreater <- (gt v var2)
                          if_ isGreater (pure v) (plus v var2))
                 var3
-        pure v
+        pure v)

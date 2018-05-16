@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, ImplicitParams, RankNTypes, ExplicitForAll, ConstraintKinds #-}
 
 module CorrectnessStreamsBasedMonad where
 
@@ -7,8 +7,11 @@ import Test.Framework
 import Test.Framework.Providers.HUnit
 
 import Monad.StreamsBasedFreeMonad
-import Monad.StreamsBasedExplicitAPI
+import Monad.StreamsBasedExplicitAPI 
 import Data.Dynamic2
+import Control.Monad.Stream.Par
+import Control.Monad.Stream.Chan
+import Control.Monad.Stream
 
 import Control.Monad.State
 
@@ -67,31 +70,32 @@ smapResultUsed v = do
 --   assertEqual "result was wrong." (10::Int) result
 --   -- assertEqual "state was wrong." ([]::[Int]) s
 
-bindTest :: Assertion
-bindTest = do
+
+bindTest :: MonadStream m => (forall a . m a -> IO a) -> Assertion
+bindTest run = do
   -- FIXME API not correct!
-  result <- runOhuaM (simpleComposition =<< sfConst' 10) $ map toDyn [0::Int,0]
+  result <- run $ runOhuaM (simpleComposition =<< sfConst' 10) $ map toDyn [0::Int,0]
   assertEqual "result was wrong." 36 result
   -- assertEqual "state was wrong." [2,3] s
 
-pipeSMapTest :: Assertion
-pipeSMapTest = do
+pipeSMapTest :: MonadStream m => (forall a . m a -> IO a) -> Assertion
+pipeSMapTest run = do
   -- FIXME API not correct!
-  result <- runOhuaM (simpleSMap =<< sfConst' [10,10]) $ map toDyn [0::Int,0,0]
+  result <- run $ runOhuaM (simpleSMap =<< sfConst' [10,10]) $ map toDyn [0::Int,0,0]
   assertEqual "result was wrong." [36,36] result
   -- assertEqual "state was wrong." [4,6] s
 
-smapContextTest :: Assertion
-smapContextTest = do
+smapContextTest :: MonadStream m => (forall a . m a -> IO a) -> Assertion
+smapContextTest run = do
   -- FIXME API not correct!
-  result <- runOhuaM (smapWithContext =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0]
+  result <- run $ runOhuaM (smapWithContext =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0]
   assertEqual "result was wrong." [42,114] result
   -- assertEqual "state was wrong." [4,6,2,3] s
 
-smapResultUsedTest :: Assertion
-smapResultUsedTest = do
+smapResultUsedTest :: MonadStream m => (forall a . m a -> IO a) -> Assertion
+smapResultUsedTest run = do
   -- FIXME API not correct!
-  result <- runOhuaM (smapResultUsed =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0,0,0,0,0,0]
+  result <- run $ runOhuaM (smapResultUsed =<< sfConst' 10) $ map toDyn [0::Int,0,0,0,0,0,0,0,0,0]
   assertEqual "result was wrong." [44,342] result
   -- assertEqual "state was wrong." [4,6,2,3,2,3] s
 
@@ -99,9 +103,16 @@ testSuite :: Test.Framework.Test
 testSuite =
     testGroup
         "Streams"
+        [ testGroup "with Chans" $ tests runChanM
+        , testGroup "with par" $ tests runParIO
+        ]
+  where
+    tests :: MonadStream m => (forall a . m a -> IO a) -> [Test.Framework.Test]
+    tests run
               -- testCase "Streams: checking monadic return" returnTest
-        [ testCase "checking monadic bind" bindTest
-        , testCase "checking simple pipe smap" pipeSMapTest
-        , testCase "checking smap with context" smapContextTest
-        , testCase "checking smap result used" smapResultUsedTest
+     =
+        [ testCase "checking monadic bind" $ bindTest run
+        , testCase "checking simple pipe smap" $ pipeSMapTest run
+        , testCase "checking smap with context" $ smapContextTest run
+        , testCase "checking smap result used" $ smapResultUsedTest run
         ]
