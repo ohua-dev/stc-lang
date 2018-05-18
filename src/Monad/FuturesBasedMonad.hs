@@ -299,7 +299,7 @@ smap algo xs =
           where
             spawnComp e stateVec =
                 PC.spawn $ runOhua (f e) $ GlobalState prevState stateVec
-              
+
 
 -- Again like smap this cannot deal with empty generators. Furthermore
 -- it always advances the generator one position more than what it
@@ -361,8 +361,8 @@ case_ cond patternsAndBranches = OhuaM moveState comp
 
       let trueBranch = patternsAndBranches !! ith
       let falseBranches = ((\(before, _:after) -> before ++ after) . List.splitAt ith) patternsAndBranches
-      (result, gs') <- runOhua (snd trueBranch) gs
-      gs'' <- foldM (flip moveStateForward) gs' $ map snd falseBranches
+      gs' <- foldM (flip moveStateForward) gs $ map snd falseBranches
+      (result, gs'') <- runOhua (snd trueBranch) gs'
       return (result,gs'')
 
 
