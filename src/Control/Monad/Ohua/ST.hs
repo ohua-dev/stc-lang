@@ -150,13 +150,14 @@ makeST0 (initialState, stateThread) = unsafePerformIO $ do
 -- (,) :: a -> b -> (a,b)
 -- it does not handle these type parameters explicitly.
 -- so I guess the following will happen:
--- (prepare, mySimpleStateThread) :: ST1 s (STRef s Integer) -> (state -> a -> ST1 s b) -> (ST1 s (STRef s Integer), state -> a -> ST1 s b)
--- this violates the type required by the first parameter of makeST0:
--- (ST1 s state, state -> a -> ST1 s b) != (ST1 s (STRef s Integer), state -> a -> ST1 s b)
--- more specifically:
--- ST1 s state != ST1 s (STRef s Integer)
--- even more specifically:
--- state != STRef s Integer
+-- (prepare, mySimpleStateThread) :: ST1 s (STRef s Integer) -> ((STRef s Integer) -> a -> ST1 s b) -> (ST1 s (STRef s Integer), (STRef s Integer)-> a -> ST1 s b)
+-- but the passed in functon and type are supposed to be generic in 's' and 'state'!
+-- this is true for 's' but not for 'state'!
+-- THIS is the point why the InitSF1-approach works because it 'existentials-away' the
+-- 'state' type variable because the InitSF1 type does not have it.
+-- However, the existential still allows to express that the 'state' is the same for
+-- the data type and the function. It hides this state aspect on the type system level wherever InitSF is being used.
+-- Really cool!
 
 -- works
 makeST1 :: forall a b.(forall s.InitSF1 s a b) -> a -> b
