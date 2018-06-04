@@ -18,6 +18,9 @@ library
   exposed-modules:       Monad.FuturesBasedMonad
                        , Monad.StreamsBasedFreeMonad
                        , Monad.StreamsBasedExplicitAPI
+                       -- , Monad.Sbfm
+                       , Control.Monad.Ohua.ST
+                       , Data.Ohua.STRef
                        -- debugging:
                        -- Debug.Scheduler
                        -- Debug.SchedulerInternal
@@ -111,6 +114,7 @@ test-suite statefulness-test
   main-is:             Spec.hs
   other-modules:       CorrectnessFuturesBasedMonad
                      , CorrectnessStreamsBasedMonad
+                     , STMonadStateThreads
   build-depends:       base
                      , statefulness
                      , mtl
@@ -120,6 +124,7 @@ test-suite statefulness-test
                      , parallel
                      , microlens
                      , transformers
+                     , ghc-prim
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-ds -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   default-language:    Haskell2010
 
@@ -129,7 +134,7 @@ executable streams-based-monad-exe
   build-depends: base, statefulness
   default-language: Haskell2010
 
-  
+
 source-repository head
   type:     git
   location: https://bitbucket.org/nrink/statefulness

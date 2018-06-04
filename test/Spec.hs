@@ -3,6 +3,7 @@ import Test.Framework
 
 import CorrectnessFuturesBasedMonad as FBM
 import CorrectnessStreamsBasedMonad as SBM
+import STMonadStateThreads as STM
 import Data.Typeable
 import Monad.Generator
 import Monad.StreamsBasedExplicitAPI as API
@@ -19,13 +20,13 @@ import Control.Monad.State
 import Control.Monad.Stream.Chan
 import Control.Monad.Stream.Par
 
-
 main :: IO ()
 main =
     flip
         defaultMainWithOpts
         mempty
-        [FBM.testSuite, SBM.testSuite, basicRuntimeTests]
+        -- [STM.testSuite]
+        [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
 
 simpleLift :: (Typeable a, Typeable b) => (a -> b) -> Var a -> ASTM s (Var b)
@@ -91,7 +92,7 @@ basicRuntimeTests =
                     "basic functions"
                     [ testCase "iterateState" $ do
                           let expected = [1..10] >>= \i -> [i .. i + 3]
-                          
+
                           let mkReal :: Int -> Generator IO Int
                               mkReal =
                                   evalStateT $ forever $ do
@@ -155,4 +156,4 @@ basicRuntimeTests =
               ]
         ]
   where
-    runOhuaM a s = runChanM $ API.runOhuaM a s 
+    runOhuaM a s = runChanM $ API.runOhuaM a s
