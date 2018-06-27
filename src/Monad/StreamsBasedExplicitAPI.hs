@@ -8,6 +8,7 @@ import           Data.Dynamic2
 import           Data.Typeable
 import           Lens.Micro
 import           Monad.StreamsBasedFreeMonad
+import Ohua.Types
 
 import Control.Monad.Stream
 
@@ -19,6 +20,34 @@ sfConst' a = call (liftSf (sfm $ pure a)) stag
 arrayAccess gsIdx = lens (forceDynamic . (!! gsIdx))
                          (\s n -> case splitAt gsIdx s of
                                       (xs, _:ys) -> xs ++ [toDyn n] ++ ys)
+
+liftWithIndexNamed :: forall s a b.(Typeable a, Typeable b, Typeable s)
+              => Int -> QualifiedBinding -> (a -> StateT s IO b) -> Var a -> ASTM [Dynamic] (Var b)
+liftWithIndexNamed gsIdx name fn = call (liftSfNamed name f) $ arrayAccess gsIdx
+  where
+    f :: a -> SfMonad s b
+    f = SfMonad . fn
+
+lift2WithIndexNamed :: forall s a b c.(Typeable a, Typeable b, Typeable c, Typeable s)
+               => Int -> QualifiedBinding -> (a -> b -> StateT s IO c) -> Var a -> Var b -> ASTM [Dynamic] (Var c)
+lift2WithIndexNamed gsIdx name fn = call (liftSfNamed name f) $ arrayAccess gsIdx
+  where
+    f :: a -> b -> SfMonad s c
+    f = (SfMonad .) . fn
+
+lift3WithIndexNamed :: forall s a b c d.(Typeable a, Typeable b, Typeable c, Typeable d, Typeable s)
+               => Int -> QualifiedBinding -> (a -> b -> c -> StateT s IO d) -> Var a -> Var b -> Var c -> ASTM [Dynamic] (Var d)
+lift3WithIndexNamed gsIdx name fn = call (liftSfNamed name f) $ arrayAccess gsIdx
+  where
+    f :: a -> b -> c -> SfMonad s d
+    f x y = SfMonad . fn x y
+
+lift4WithIndexNamed :: forall s a b c d e.(Typeable a, Typeable b, Typeable c, Typeable d, Typeable e, Typeable s)
+               => Int -> QualifiedBinding -> (a -> b -> c -> d -> StateT s IO e) -> Var a -> Var b -> Var c -> Var d -> ASTM [Dynamic] (Var e)
+lift4WithIndexNamed gsIdx name fn = call (liftSfNamed name f) $ arrayAccess gsIdx
+  where
+    f :: a -> b -> c -> d -> SfMonad s e
+    f x y z = SfMonad . fn x y z
 
 liftWithIndex :: forall s a b.(Typeable a, Typeable b, Typeable s)
               => Int -> (a -> StateT s IO b) -> Var a -> ASTM [Dynamic] (Var b)
@@ -47,7 +76,6 @@ lift4WithIndex gsIdx fn = call (liftSf f) $ arrayAccess gsIdx
   where
     f :: a -> b -> c -> d -> SfMonad s e
     f x y z = SfMonad . fn x y z
-
 
 runOhuaM :: (Typeable a, MonadStream m) => ASTM s (Var a) -> s -> m a
 runOhuaM comp s = flip runAlgo s =<< liftIO (createAlgo comp)
