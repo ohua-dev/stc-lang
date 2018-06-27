@@ -42,6 +42,7 @@ module Monad.StreamsBasedFreeMonad
     , UDict
     -- ** helper functions
     , liftSf
+    , liftSfNamed
     , sfm
     , call
     , sfConst
@@ -57,6 +58,7 @@ module Monad.StreamsBasedFreeMonad
     , evaluateAST
     , runCompiler
     , runAlgo
+    , runAlgoWStats
     -- ** The stream monad
     , Packet
     , StreamM
@@ -88,6 +90,7 @@ module Monad.StreamsBasedFreeMonad
     , T
     , makeDestructuringExplicit
     , united
+    , Stats
     ) where
 
 import Control.Monad
@@ -146,7 +149,9 @@ import Ohua.Unit
 import Ohua.Util
 import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
+import System.CPUTime
 import Type.Magic
+import Text.Printf
 
 import Control.Monad.Stream (MonadStream, Reciever, Sender)
 import qualified Control.Monad.Stream as ST
@@ -185,7 +190,7 @@ newtype SfMonad sfState ret = SfMonad
                , MonadState sfState
                )
 
--- | A stateful funtion nicely packaged with all its required capabilities
+-- | A stateful function nicely packaged with all its required capabilities
 data Sf fnType =
     forall state returnType. ( ReturnType fnType ~ SfMonad state returnType
                              , Typeable returnType
@@ -204,7 +209,7 @@ data ASTAction globalState a
                                         InvokeSf (Sf sfType)
                                                  (Accessor globalState sfState)
                                                  [Var Void] -- reference to the input vars
-                                                 (Var returnType -> a) -- continutation
+                                                 (Var returnType -> a) -- continuation
     | forall inputType returnType f. ( Typeable inputType
                                      , Typeable returnType
                                      , Functor f
@@ -259,6 +264,13 @@ liftSf ::
     => f
     -> Sf f
 liftSf f = Sf f Nothing
+
+liftSfNamed ::
+       (ReturnType f ~ SfMonad state ret, Typeable ret, ApplyVars f)
+    => QualifiedBinding
+    -> f
+    -> Sf f
+liftSfNamed name f = Sf f (Just name)
 
 -- | A convenience function. It doesn't actually do anything (@sfm =
 -- id@) but it has a concrete type and therefore can be used to help
@@ -695,7 +707,7 @@ evaluateAST (ASTM m) = (dict, build e)
                 (L.Var (L.Sf ARefs.generate Nothing) `L.Apply`
                  L.Lambda "_" innerE)
         cont rv
-      
+
 
 newtype GenIdM a = GenIdM
     { unwrapGenIdM :: S.State FnId a
@@ -915,6 +927,9 @@ withIsAllowed ac =
 atomicModifyIORef'_ :: MonadIO m => IORef a -> (a -> a) -> m ()
 atomicModifyIORef'_ ref f = liftIO $ atomicModifyIORef' ref ((, ()) . f)
 
+atomicModifyIORef_ :: MonadIO m => IORef a -> (a -> a) -> m ()
+atomicModifyIORef_ ref f = liftIO $ atomicModifyIORef ref ((, ()) . f)
+
 -- | A class that is used to apply a function with multiple arguments
 -- to a list of arguments.
 class ApplyVars t where
@@ -928,22 +943,41 @@ instance ApplyVars (SfMonad state retType) where
     applyVars res [] = res
     applyVars _ _ = error "Too many arguments"
 
+collectStats = True
+
+type Stats = Map.Map QualifiedBinding Integer
+type RawStats = [(QualifiedBinding, Integer)]
+
 -- | Given a reference for a stateful function run it as a stream
 -- processor
-runFunc :: MonadStream m => SfRef globalState -> IORef globalState -> StreamInit m ()
-runFunc (SfRef (Sf f _) accessor) stTrack =
+runFunc :: MonadStream m => IORef RawStats -> QualifiedBinding -> SfRef globalState -> IORef globalState -> StreamInit m ()
+runFunc statRef funcName (SfRef (Sf f _) accessor) stTrack =
     pure $ do
         inVars <- recieveAllUntyped
         withIsAllowed $ do
             s <- liftIO $ readIORef stTrack
             (ret, newState) <-
                 liftIO $
+                caught $
+                measured $
                 runStateT
                     (runSfMonad (applyVars f $ V.toList inVars))
                     (s ^. accessor)
             atomicModifyIORef'_ stTrack (accessor .~ newState)
             ret `seq` pure ()
             send ret
+  where
+    measured ac
+        | collectStats = do
+            start <- getCPUTime
+            res <- ac
+            end <- getCPUTime
+            atomicModifyIORef_ statRef ((funcName, end - start) :)
+            pure res
+        | otherwise = ac
+    caught ac = ac `catch` (\e@(ErrorCall _) -> error $ printf "error in %v '%v'" (show funcName) (show e))
+
+
 
 -- Running the stream
 mountStreamProcessor ::
@@ -1046,13 +1080,25 @@ toOutputManager v
 constants :: Map.Map HostExpr Dynamic
 constants = [(HEConst.true, toDyn True)]
 
+formatStats :: [(QualifiedBinding, Integer)] -> Stats
+formatStats =
+    fmap (\l -> sum l `div` toInteger (length l)) . Map.fromListWith (++) . map (second pure)
+
 runAlgo ::
        forall m a globalState. (MonadStream m, Typeable a)
     => Algorithm globalState m a
     -> globalState
     -> m a
-runAlgo (Algorithm G.OutGraph {..} dict) st = do
+runAlgo a st = fst <$> runAlgoWStats a st
+
+runAlgoWStats ::
+       forall m a globalState. (MonadStream m, Typeable a)
+    => Algorithm globalState m a
+    -> globalState
+    -> m (a, Stats)
+runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
     stateVar <- liftIO $ newIORef st
+    statRef <- liftIO $ newIORef []
     (outMap, funcs) <- foldM f (outputMap, []) operators
     (retSink, retSource) <- ST.createStream
     let finalMap =
@@ -1065,7 +1111,7 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
         (\(op@(G.Operator {..}), ctxArc, inChans) ->
              let outChans = finalMap Map.! operatorId
                  operatorCode
-                     | nthNS == (qbNamespace operatorType) =
+                     | nthNS == qbNamespace operatorType =
                          StreamProcessor $
                          pure $ do
                              input <- recieve 0
@@ -1079,7 +1125,7 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
                          Map.lookup operatorType dict
                  processor =
                      case operatorCode of
-                         CallSf sfRef -> runFunc sfRef stateVar
+                         CallSf sfRef -> runFunc statRef operatorType sfRef stateVar
                          StreamProcessor processor' -> processor'
               in (op, ) <$>
                  ST.spawn
@@ -1091,11 +1137,12 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
         funcs
     UserPacket ret <- ST.recieve retSource
     EndOfStreamPacket <- ST.recieve retSource
-    pure $ forceDynamic ret
+    stats <- liftIO $ readIORef statRef
+    pure (forceDynamic ret, formatStats stats)
   where
     outputMap :: Map.Map FnId [(Int, Sender m (Packet Dynamic))]
     outputMap = Map.fromList $ zip (map G.operatorId operators) (repeat [])
-    f (m, l) op@(G.Operator {operatorId}) = do
+    f (m, l) op@G.Operator {operatorId} = do
         let (ctxInput, inputs) =
                 fromMaybe (Nothing, []) $ Map.lookup operatorId argDict
         arcs <-
@@ -1135,7 +1182,7 @@ runAlgo (Algorithm G.OutGraph {..} dict) st = do
           snd <$>
           find ((== -1) . fst) l
         , map snd $ sortOn fst $ filter ((/= -1) . fst) l)
-    
+
 
 -- Types for the example
 data T =
@@ -1183,7 +1230,7 @@ gt :: (Typeable a, Ord a) => Var a -> Var a -> ASTM s (Var Bool)
 gt = call (liftSf (\a b -> sfm $ pure $ a > b)) stag
 
 algorithm :: MonadStream m => IO (Algorithm Int m [Int])
-algorithm = 
+algorithm =
     createAlgo  (do
         var1 <- sf1
         var3 <- sf2 var1
