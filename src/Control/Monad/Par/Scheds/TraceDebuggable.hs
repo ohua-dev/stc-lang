@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
              ExistentialQuantification, FlexibleContexts #-}
 module Control.Monad.Par.Scheds.TraceDebuggable where
@@ -10,12 +11,10 @@ import Data.IORef
 import System.IO.Unsafe
 import Control.Concurrent hiding (yield)
 import GHC.Conc (numCapabilities)
-import Control.DeepSeq
 import Control.Exception
 import System.IO
 import Control.Monad.IO.Class
 import GHC.Stack
-import Ohua.Util
 
 
 
@@ -54,7 +53,7 @@ runPar_internal _doSync x = do
 
 
 -- | Run a parallel, deterministic computation and return its result.
--- 
+--
 --   Note: you must NOT return an IVar in the output of the parallel
 --   computation.  This is unfortunately not enforced, as it is with
 --   `runST` or with newer libraries that export a Par monad, such as
