@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
              ExistentialQuantification, FlexibleContexts #-}
 module Control.Monad.Par.Scheds.TraceDebuggable where
@@ -15,7 +16,6 @@ import Control.Exception
 import System.IO
 import Control.Monad.IO.Class
 import GHC.Stack
-import Ohua.Util
 
 import Debug.Trace as T
 

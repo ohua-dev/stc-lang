@@ -161,6 +161,10 @@ caseSmapTest = do
   (result,s) <- runOhuaM (smapWithCase [2,6]) $ map toS [0::Int,0,0]
   assertEqual "result was wrong." [12,24] result
   assertEqual "state was wrong." [4,3,3] (map fromS s :: [Int])
+  -- execute only once
+  (result,s) <- runOhuaM (smapWithCase [2]) $ map toS [0::Int,0,0]
+  assertEqual "result was wrong." [12] result
+  --assertEqual "state was wrong." [4,3,3] (map fromS s :: [Int])
 
 nestedCaseTest :: Assertion
 nestedCaseTest = do
@@ -188,8 +192,8 @@ notEnoughStateTest = do
 smapHandlesEmptyList :: Assertion
 smapHandlesEmptyList =
     void (runOhuaM smapOverEmptyList (map toS [0 .. 4 :: Int])) `catch` \ErrorCall {} ->
-        assertFailure "Exception was thrown" 
-  
+        assertFailure "Exception was thrown"
+
 
 testSuite :: Test.Framework.Test
 testSuite =
