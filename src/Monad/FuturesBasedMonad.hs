@@ -109,7 +109,8 @@ data OhuaM result = OhuaM {
 -- the type of a record. that is because each function captures its own type variable so you can not
 -- compose such data as I tried in <*> or =<< with GlobalState (which came from another data).
 
-data GlobalState ivar = GlobalState [ivar S] [ivar S] deriving (Generic)
+data GlobalState ivar = GlobalState { input :: [ivar S], result :: [ivar S] } deriving (Generic)
+-- data GlobalState ivar = GlobalState [ivar S] [ivar S] deriving (Generic)
 instance (NFData (ivar S)) => NFData (GlobalState ivar)
 
 --

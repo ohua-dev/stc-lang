@@ -4,6 +4,7 @@ import Test.Framework
 import CorrectnessFuturesBasedMonad as FBM
 import CorrectnessStreamsBasedMonad as SBM
 import STMonadStateThreads as STM
+import PerformanceFuturesBasedMonad as PFBM
 import Data.Typeable
 import Monad.Generator
 import Monad.StreamsBasedExplicitAPI as API
@@ -25,8 +26,9 @@ main =
     flip
         defaultMainWithOpts
         mempty
+        [PFBM.testSuite]
         -- [STM.testSuite]
-        [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
+        -- [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
 
 simpleLift :: (Typeable a, Typeable b) => (a -> b) -> Var a -> ASTM s (Var b)

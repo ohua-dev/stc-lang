@@ -9,7 +9,7 @@ import Prelude hiding (mapM, sequence, head,tail)
 import Data.IORef
 import System.IO.Unsafe
 import Control.Concurrent hiding (yield)
-import GHC.Conc (numCapabilities)
+import GHC.Conc (numCapabilities,getNumCapabilities)
 import Control.DeepSeq
 import Control.Exception
 import System.IO
@@ -17,6 +17,7 @@ import Control.Monad.IO.Class
 import GHC.Stack
 import Ohua.Util
 
+import Debug.Trace as T
 
 
 doesThisBlockIndefinitely :: HasCallStack => IO a -> IO a
@@ -29,20 +30,43 @@ doesThisBlockIndefinitely ac =
 runPar_internal :: Bool -> Par a -> IO a
 runPar_internal _doSync x = do
     workpools <- replicateM numCapabilities $ newIORef []
+    -- numCaps <- getNumCapabilities
+    -- Fix for bug #2: we need to have at least one worker (= 2 capabilites)!
+    -- numCaps <- max 2 <$> getNumCapabilities
+    -- workpools <- replicateM numCaps $ newIORef []
+    putStrLn $ "num states: " ++ (show $ length workpools)
     idle <- newIORef []
     let states =
             [ Sched {no = x, workpool = wp, idle, scheds = states}
             | (x, wp) <- zip [0 ..] workpools
             ]
-    (main_cpu, _) <- threadCapability =<< myThreadId
     m <- newEmptyMVar
+    -- bug 1: if we have only 1 capability and the main is currently not located on capability 0
+    --        then we deadlock! -> verified!
+    --
+    (main_cpu, _) <- threadCapability =<< myThreadId
+    --
+    -- Fix: take the code for the old version even though some data might have to move.
+    -- let main_cpu = 0
+    putStrLn $ "main cpu: " ++ (show main_cpu)
     forM_ (zip [0 ..] states) $ \(cpu, state) ->
         forkOn cpu $
         (if (cpu /= main_cpu)
              then reschedule state
              else do
+                 putStrLn "running main thread: "
                  rref <- newIORef Empty
                  sched _doSync state $
+                     -- bug 2: `runCont x` only delivers a trace (which is something like a free monad data structure -> linked list).
+                     --        now somebody needs to work that trace.
+                     --        but if we have only a single capability which the cpu_main thread is running on then nobody will actually
+                     --        work the trace.
+                     --        note that `sched` only pushes work to the work queue!
+                     --        the code in pushWork adds task to the *front* of the queue. since there are no idle workers none are woken
+                     --        up and none will actually steal the work.
+                     --        when `sched` now sees the last task (the line added to every Par computation below with Done) then it will
+                     --        itself try to run the trace.
+                     --        (I did not find out how it eventually reaches Done in `sched` and then just exits out of the scheduler loop.)
                      runCont (x >>= put_ (IVar rref)) (const Done)
                  readIORef rref >>= doesThisBlockIndefinitely . putMVar m) `catch` \e -> do
             hPutStrLn stderr $ displayException (e :: SomeException)
@@ -54,7 +78,7 @@ runPar_internal _doSync x = do
 
 
 -- | Run a parallel, deterministic computation and return its result.
--- 
+--
 --   Note: you must NOT return an IVar in the output of the parallel
 --   computation.  This is unfortunately not enforced, as it is with
 --   `runST` or with newer libraries that export a Par monad, such as
@@ -78,8 +102,8 @@ reschedule queue@Sched{ workpool } = do
            []      -> ([], Nothing)
            (t:ts') -> (ts', Just t)
   case e of
-    Nothing -> steal queue
-    Just t  -> sched True queue t
+    Nothing -> T.trace ("stealing something") $ steal queue
+    Just t  -> T.trace ("scheduling something") $ sched True queue t
 
 
 steal :: Sched -> IO ()
@@ -90,6 +114,11 @@ steal q@Sched{ idle, scheds, no=my_no } = do
     go [] = do m <- newEmptyMVar
                r <- atomicModifyIORef idle $ \is -> (m:is, is)
                if length r == numCapabilities - 1
+               -- --> begin new sebastian
+               -- if length r == (length scheds) - 1
+               -- numCaps <- getNumCapabilities
+               -- if length r == numCaps - 1
+               -- <-- end new sebastian
                   then do
                      -- printf "cpu %d initiating shutdown\n" my_no
                      mapM_ (\m -> putMVar m True) r
