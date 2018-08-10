@@ -140,6 +140,7 @@ test-suite statefulness-test
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N2
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N3
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N4
+  -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N4-qa
   -- ghc-options:         -threaded -O2 -rtsopts -with-rtsopts=-N
   -- ghc-options:         -threaded -rtsopts -O2
   -- ghc-options:         -threaded -O2

@@ -30,11 +30,11 @@ instance MonadStream PChanM where
     recieve ac = ac
 
     spawn :: PChanM () -> PChanM ()
-    -- spawn = ChanM . void . forkIO . runChanM
     spawn comp = do
       let ioComp = evalStateT comp 0
       cap    <- get
-      liftIO $ putStrLn $ "forking on cap num: " ++ (show cap)
+      defCap <- liftIO $ getNumCapabilities
+      liftIO $ putStrLn $ "forking on cap num: " ++ (show (cap `mod` defCap) )
       _      <- liftIO $ forkOn cap ioComp
       put $ cap + 1
       return ()

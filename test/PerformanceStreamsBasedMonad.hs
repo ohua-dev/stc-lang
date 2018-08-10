@@ -1,4 +1,4 @@
-{-# LANGUAGE RankNTypes, ExplicitForAll #-}
+{-# LANGUAGE RankNTypes, ExplicitForAll, OverloadedStrings #-}
 module PerformanceStreamsBasedMonad where
 
 import Test.HUnit hiding (State)
@@ -27,10 +27,10 @@ currentTimeMillis = round . (* 1000) <$> getPOSIXTime
 
 pipeline v = do
   c <- return v
-  r0 <- liftWithIndex 0 work c
-  r1 <- liftWithIndex 1 (work . snd) r0
-  r2 <- liftWithIndex 2 (work . snd) r1
-  r3 <- liftWithIndex 3 (work . snd) r2
+  r0 <- liftWithIndexNamed 0 "perf/wrk-1" work c
+  r1 <- liftWithIndexNamed 1 "perf/wrk-2" (work . snd) r0
+  r2 <- liftWithIndexNamed 2 "perf/wrk-3" (work . snd) r1
+  r3 <- liftWithIndexNamed 3 "perf/wrk-4" (work . snd) r2
   r  <- liftWithIndex 4 snd' r3
   return r
 
@@ -59,7 +59,7 @@ pipeSMapTest run = do
   assertEqual "result was wrong." expectedOutputs result
 
 coresTest :: MonadStream m => (forall a . m a -> IO a) -> Assertion
-coresTest runner = mapM_ runTest [1..4]
+coresTest runner = mapM_ runTest [1,4]--[1..4]
   where
     runTest numCores = do
       setNumCapabilities numCores
