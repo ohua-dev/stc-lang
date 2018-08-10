@@ -9,6 +9,8 @@ import           Control.Exception (evaluate)
 import Control.DeepSeq
 import Control.Monad.State
 
+import Monad.StreamsBasedFreeMonad
+
 -- Iterates the sin function n times on its input and returns the sum
 -- of all iterations.
 sin_iter :: Int -> Float -> Float

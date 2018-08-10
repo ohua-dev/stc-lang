@@ -5,6 +5,7 @@ import CorrectnessFuturesBasedMonad as FBM
 import CorrectnessStreamsBasedMonad as SBM
 import STMonadStateThreads as STM
 import PerformanceFuturesBasedMonad as PFBM
+import PerformanceStreamsBasedMonad as PSBFM
 import Data.Typeable
 import Monad.Generator
 import Monad.StreamsBasedExplicitAPI as API
@@ -26,7 +27,8 @@ main =
     flip
         defaultMainWithOpts
         mempty
-        [PFBM.testSuite]
+        -- [PFBM.testSuite]
+        [PSBFM.testSuite]
         -- [STM.testSuite]
         -- [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite

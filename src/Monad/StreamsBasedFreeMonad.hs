@@ -125,7 +125,7 @@ import Data.Either (lefts)
 import Data.Foldable (fold)
 import Data.IORef
 import qualified Data.IntMap as IMap
-import Data.List (find, nub, sortOn)
+import Data.List (find, nub, sortOn,genericLength)
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Vector (Vector)
@@ -1099,7 +1099,11 @@ constants = [(HEConst.true, toDyn True)]
 
 formatStats :: [(QualifiedBinding, Integer)] -> Stats
 formatStats =
-    fmap sum . Map.fromListWith (++) . map (second pure)
+    fmap
+     -- sum
+     (\(xs::[Integer]) -> round $ realToFrac (sum xs) / genericLength xs)
+     . Map.fromListWith (++)
+     . map (second pure)
 
 runAlgo ::
        forall m a globalState. (MonadStream m, Typeable a)

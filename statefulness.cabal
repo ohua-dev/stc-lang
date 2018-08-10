@@ -32,6 +32,7 @@ library
                        , Control.Monad.Stream
                        , Control.Monad.Stream.Chan
                        , Control.Monad.Stream.Par
+                       , Control.Monad.Stream.PinnedChan
   if impl(ghc >= 8.2.0)
     other-modules:       Type.Magic.GHC8
   else
@@ -119,6 +120,7 @@ test-suite statefulness-test
                      , STMonadStateThreads
                      , FakeComputation
                      , PerformanceFuturesBasedMonad
+                     , PerformanceStreamsBasedMonad
   build-depends:       base
                      , statefulness
                      , mtl
@@ -134,9 +136,10 @@ test-suite statefulness-test
                      , rdtsc
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-ds -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   -- ghc-options:
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N1
+  -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N1
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N2
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N3
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N4
   -- ghc-options:         -threaded -O2 -rtsopts -with-rtsopts=-N
   -- ghc-options:         -threaded -rtsopts -O2
   -- ghc-options:         -threaded -O2
