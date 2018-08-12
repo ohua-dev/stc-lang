@@ -34,7 +34,7 @@ instance MonadStream PChanM where
       let ioComp = evalStateT comp 0
       cap    <- get
       defCap <- liftIO $ getNumCapabilities
-      liftIO $ putStrLn $ "forking on cap num: " ++ (show (cap `mod` defCap) )
+      -- liftIO $ putStrLn $ "forking on cap num: " ++ (show (cap `mod` defCap) )
       _      <- liftIO $ forkOn cap ioComp
       put $ cap + 1
       return ()

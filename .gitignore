@@ -8,3 +8,5 @@ ohua-core
 *.iml
 cabal.config
 .idea
+*.prof
+*.eventlog

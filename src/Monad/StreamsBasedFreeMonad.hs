@@ -1151,7 +1151,7 @@ runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
                              CallSf sfRef -> runFunc statRef operatorType sfRef st
                              StreamProcessor processor' -> pure (Nothing , processor')
                  in do
-                   liftIO $ putStrLn $ "fn: " ++ (show operatorType) 
+                   -- liftIO $ putStrLn $ "fn: " ++ (show operatorType) 
                    (syncState, processor) <- liftIO initProc
                    (syncState, ) <$>
                      ST.spawn
