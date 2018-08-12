@@ -109,7 +109,52 @@ coresTest cores runner = mapM runTest cores
   where
     runTest numCores = do
       setNumCapabilities numCores
-      -- pipe4Test runner
-      pipe3Test runner
+      pipe4Test runner
+      -- pipe3Test runner
 
       -- TODO validation needed! (for now, check the exec times)
+
+-- log
+-- ----
+-- with output:
+--
+-- num cores (RTS option): 1
+-- num cores: 1
+-- Exec time [ms]: 15575
+-- num cores (RTS option): 1
+-- num cores: 2
+-- Exec time [ms]: 8917
+-- num cores (RTS option): 1
+-- num cores: 3
+-- Exec time [ms]: 7628
+-- num cores (RTS option): 1
+-- num cores: 4
+-- Exec time [ms]: 5857
+--
+-- without output:
+-- num cores (RTS option): 1
+-- num cores: 1
+-- Exec time [ms]: 15826
+-- num cores (RTS option): 1
+-- num cores: 2
+-- Exec time [ms]: 15880
+-- num cores (RTS option): 1
+-- num cores: 3
+-- Exec time [ms]: 15586
+-- num cores (RTS option): 1
+-- num cores: 4
+-- Exec time [ms]: 15838
+--
+-- without output (single run with 4 cores to make sure the consecutive runs don't influence each other):
+-- num cores (RTS option): 4
+-- num cores: 4
+-- Exec time [ms]: 15481
+--
+-- Question:
+-- My assumption is that the reason why this does not scale in the case without logging was the
+-- black holing thing which computes the stuff once and just reuses it.
+-- If this is so then how can we ever be faster in the pipeline parallel case?!
+-- It feels more like the 15481 ms are the time needed to really compute everything. If this is the case
+-- then I something is going on in the scheduler that I have not understood yet.
+-- This claim is supported by the observation that the runtime for the single-threaded case is the same
+-- no matter if run with or without output.

@@ -41,13 +41,13 @@ type ID = Int
 
 work :: Float -> StateT (ID,Int) IO (Float, Float)
 work wrk = do
-  liftIO $ putStrLn $ "work: " ++ (show wrk)
+  -- liftIO $ putStrLn $ "work: " ++ (show wrk)
   (identifier,numIter) <- get
   tId <- liftIO myThreadId
   -- liftIO $ putStrLn $ "start: " ++ (show identifier) ++ " on thread: " ++ (show tId)
   let r = wrk_sins numIter wrk
   -- liftIO $ putStrLn $ "stop: " ++ (show identifier)
-  liftIO $ putStrLn $ "result: " ++ (show r)
+  -- liftIO $ putStrLn $ "result: " ++ (show r)
   return (wrk,r)
 
 gwork :: (Int -> Float -> Float) -> Float -> StateT (ID,Int) IO (Float, Float)
