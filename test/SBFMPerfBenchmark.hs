@@ -84,6 +84,7 @@ pipe4Test run = do
   -- assertEqual "result was wrong." expectedOutputs result
   return (expectedOutputs, result)
 
+
 pipe3Test :: MonadStream m => (forall a . m a -> IO a) -> IO ([Float],[Float])
 pipe3Test run = do
   let a = 3000000 :: Float

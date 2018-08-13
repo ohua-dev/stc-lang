@@ -13,6 +13,7 @@ import Monad.StreamsBasedFreeMonad
 
 import Control.Concurrent (myThreadId)
 
+
 -- Iterates the sin function n times on its input and returns the sum
 -- of all iterations.
 sin_iter :: Int -> Float -> Float
@@ -45,7 +46,8 @@ work wrk = do
   (identifier,numIter) <- get
   tId <- liftIO myThreadId
   -- liftIO $ putStrLn $ "start: " ++ (show identifier) ++ " on thread: " ++ (show tId)
-  let r = wrk_sins numIter wrk
+  -- let r = wrk_sins numIter wrk
+  r <- liftIO $ evaluate $ force $ sin_iter numIter (2.222 + wrk) -- this is the solution!
   -- liftIO $ putStrLn $ "stop: " ++ (show identifier)
   -- liftIO $ putStrLn $ "result: " ++ (show r)
   return (wrk,r)
@@ -56,7 +58,8 @@ gwork f wrk = do
   (identifier,numIter) <- get
   tId <- liftIO myThreadId
   -- liftIO $ putStrLn $ "start: " ++ (show identifier) ++ " on thread: " ++ (show tId)
-  let r = gwrk numIter wrk f
+  -- let r = gwrk numIter wrk f
+  r <- liftIO $ evaluate $ force $ f numIter (2.222 + wrk) -- this is the solution!
   -- liftIO $ putStrLn $ "stop: " ++ (show identifier)
   -- liftIO $ putStrLn $ "result: " ++ (show r)
   return (wrk,r)

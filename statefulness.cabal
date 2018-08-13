@@ -161,13 +161,14 @@ executable statefulness-perf-exe
                      , deepseq
                      , time
                      , rdtsc
+  -- ghc-options:         -threaded -ddump-hi -ddump-ds -ddump-simpl -dverbose-core2core -ddump-to-file -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N -ddump-to-file -ddump-ds -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   -- ghc-options:
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N1
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N2
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N3
   -- ghc-options:         -threaded -Wall -O2 -feager-blackholing -eventlog
-  ghc-options:         -threaded -Wall -O2 -eventlog
+  ghc-options:         -threaded -Wall -O2 -eventlog -rtsopts
   -- ghc-options:         -threaded -Wall -O2 -eventlog -rtsopts -with-rtsopts=-N4
   -- ghc-options:         -threaded -Wall -O2 -rtsopts -with-rtsopts=-N4
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N4-qa
