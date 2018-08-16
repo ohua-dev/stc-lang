@@ -64,8 +64,8 @@ threeStepPipeline = smap pipe3
 -- Beware: You need to recompile with "-threaded" in order to  enable concurrency!
 --         Just changing the cabal file and running `stack test` won't work.
 --         Instead always do `stack clean && stack test`
-pipe4Test :: MonadStream m => (forall a . m a -> IO a) -> IO ([Float],[Float])
-pipe4Test run = do
+homoPipeTest :: MonadStream m => (forall a . m a -> IO a) -> IO ([Float],[Float])
+homoPipeTest run = do
   let a = 3000000 :: Float
   let b = 20000000 :: Int
   let dataCount = 10
@@ -85,8 +85,8 @@ pipe4Test run = do
   return (expectedOutputs, result)
 
 
-pipe3Test :: MonadStream m => (forall a . m a -> IO a) -> IO ([Float],[Float])
-pipe3Test run = do
+heteroPipeTest :: MonadStream m => (forall a . m a -> IO a) -> IO ([Float],[Float])
+heteroPipeTest run = do
   let a = 3000000 :: Float
   let b = 20000000 :: Int
   let dataCount = 10
@@ -110,8 +110,8 @@ coresTest cores runner = mapM runTest cores
   where
     runTest numCores = do
       setNumCapabilities numCores
-      pipe4Test runner
-      -- pipe3Test runner
+      homoPipeTest runner
+      -- heteroPipeTest runner
 
       -- TODO validation needed! (for now, check the exec times)
 

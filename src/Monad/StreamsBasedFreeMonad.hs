@@ -951,7 +951,7 @@ instance ApplyVars (SfMonad state retType) where
     applyVars res [] = res
     applyVars _ _ = error "Too many arguments"
 
-collectStats = False
+collectStats = True
 
 type Stats = Map.Map QualifiedBinding Integer
 type RawStats = [(QualifiedBinding, Integer)]
@@ -1100,8 +1100,8 @@ constants = [(HEConst.true, toDyn True)]
 formatStats :: [(QualifiedBinding, Integer)] -> Stats
 formatStats =
     fmap
-     -- sum
-     (\(xs::[Integer]) -> round $ realToFrac (sum xs) / genericLength xs)
+     sum
+     -- (\(xs::[Integer]) -> round $ realToFrac (sum xs) / genericLength xs)
      . Map.fromListWith (++)
      . map (second pure)
 
@@ -1151,7 +1151,7 @@ runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
                              CallSf sfRef -> runFunc statRef operatorType sfRef st
                              StreamProcessor processor' -> pure (Nothing , processor')
                  in do
-                   -- liftIO $ putStrLn $ "fn: " ++ (show operatorType) 
+                   -- liftIO $ putStrLn $ "fn: " ++ (show operatorType)
                    (syncState, processor) <- liftIO initProc
                    (syncState, ) <$>
                      ST.spawn

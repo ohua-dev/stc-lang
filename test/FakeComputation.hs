@@ -47,7 +47,8 @@ work wrk = do
   tId <- liftIO myThreadId
   -- liftIO $ putStrLn $ "start: " ++ (show identifier) ++ " on thread: " ++ (show tId)
   -- let r = wrk_sins numIter wrk
-  r <- liftIO $ evaluate $ force $ sin_iter numIter (2.222 + wrk) -- this is the solution!
+  let r = sin_iter numIter (2.222 + wrk)
+  -- r <- liftIO $ evaluate $ force $ sin_iter numIter (2.222 + wrk) -- this is the solution!
   -- liftIO $ putStrLn $ "stop: " ++ (show identifier)
   -- liftIO $ putStrLn $ "result: " ++ (show r)
   return (wrk,r)
@@ -58,8 +59,8 @@ gwork f wrk = do
   (identifier,numIter) <- get
   tId <- liftIO myThreadId
   -- liftIO $ putStrLn $ "start: " ++ (show identifier) ++ " on thread: " ++ (show tId)
-  -- let r = gwrk numIter wrk f
-  r <- liftIO $ evaluate $ force $ f numIter (2.222 + wrk) -- this is the solution!
+  let r = gwrk numIter wrk f
+  -- r <- liftIO $ evaluate $ force $ f numIter (2.222 + wrk) -- this is the solution!
   -- liftIO $ putStrLn $ "stop: " ++ (show identifier)
   -- liftIO $ putStrLn $ "result: " ++ (show r)
   return (wrk,r)
