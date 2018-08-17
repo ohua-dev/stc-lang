@@ -951,7 +951,7 @@ instance ApplyVars (SfMonad state retType) where
     applyVars res [] = res
     applyVars _ _ = error "Too many arguments"
 
-collectStats = True
+collectStats = False
 
 type Stats = Map.Map QualifiedBinding Integer
 type RawStats = [(QualifiedBinding, Integer)]
