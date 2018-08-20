@@ -138,10 +138,10 @@ chanToGenerator ::
        (MonadIO m, IsGenerator g m, Monad g) => Chan (Maybe a) -> g a
 chanToGenerator c = recur
   where
-    recur = maybe finish (flip yield recur) =<< needM (liftIO $ readChan c)
+    recur = maybe finish (`yield` recur) =<< needM (liftIO $ readChan c)
 
 foldableGenerator :: (Foldable f, IsGenerator g m) => f a -> g a
-foldableGenerator = foldr' (\a rest -> yield a rest) finish
+foldableGenerator = foldr' yield finish
 
 foldableGeneratorEval :: (Foldable f, IsGenerator g m) => (forall b . a -> b -> b) -> f a -> g a
 foldableGeneratorEval eval = foldr (\a rest -> a `eval` yield a rest) finish

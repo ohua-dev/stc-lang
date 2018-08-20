@@ -762,7 +762,7 @@ runCompiler :: L.Expression -> IO G.OutGraph
 runCompiler =
     fmap (either (error . Str.toString) makeDestructuringExplicit) . runExceptT .
     runStderrLoggingT .
-    filterLogger (const $ (>= LevelError)) .
+    filterLogger (const (>= LevelError)) .
     compile def def {passAfterDFLowering = cleanUnits}
 
 -- The stream backend
@@ -853,7 +853,11 @@ endProcessingAt p = do
       -- port had data left over in it
          -> packetsLeftOverErr (show i)
 
-withCtxArc :: Monad m => StreamM m a -> (Reciever m (Packet Dynamic) -> StreamM m a) -> StreamM m a
+withCtxArc ::
+       Monad m
+    => StreamM m a
+    -> (Reciever m (Packet Dynamic) -> StreamM m a)
+    -> StreamM m a
 withCtxArc failAction succeedAction =
     StreamM (view _1) >>= maybe failAction succeedAction
 
