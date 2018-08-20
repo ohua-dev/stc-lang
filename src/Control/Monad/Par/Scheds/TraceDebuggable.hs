@@ -20,6 +20,10 @@ import GHC.Stack
 import Debug.Trace as T
 
 
+putErrLn :: String -> IO ()
+putErrLn = hPutStrLn stderr
+
+
 doesThisBlockIndefinitely :: HasCallStack => IO a -> IO a
 doesThisBlockIndefinitely ac =
   ac `catch` \BlockedIndefinitelyOnMVar ->
@@ -34,7 +38,7 @@ runPar_internal _doSync x = do
     -- Fix for bug #2: we need to have at least one worker (= 2 capabilites)!
     -- numCaps <- max 2 <$> getNumCapabilities
     -- workpools <- replicateM numCaps $ newIORef []
-    putStrLn $ "num states: " ++ (show $ length workpools)
+    putErrLn $ "num states: " ++ (show $ length workpools)
     idle <- newIORef []
     let states =
             [ Sched {no = x, workpool = wp, idle, scheds = states}
@@ -48,13 +52,13 @@ runPar_internal _doSync x = do
     --
     -- Fix: take the code for the old version even though some data might have to move.
     -- let main_cpu = 0
-    putStrLn $ "main cpu: " ++ (show main_cpu)
+    putErrLn $ "main cpu: " ++ (show main_cpu)
     forM_ (zip [0 ..] states) $ \(cpu, state) ->
         forkOn cpu $
         (if (cpu /= main_cpu)
              then reschedule state
              else do
-                 putStrLn "running main thread: "
+                 putErrLn "running main thread: "
                  rref <- newIORef Empty
                  sched _doSync state $
                      -- bug 2: `runCont x` only delivers a trace (which is something like a free monad data structure -> linked list).
