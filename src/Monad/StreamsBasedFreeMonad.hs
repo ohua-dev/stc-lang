@@ -1,29 +1,10 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE ExplicitForAll #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE InstanceSigs #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE PolyKinds #-}
-
+{-# LANGUAGE CPP, DataKinds, DeriveFunctor,
+  ExistentialQuantification, ExplicitForAll, FlexibleContexts,
+  FlexibleInstances, GeneralizedNewtypeDeriving, InstanceSigs,
+  LambdaCase, MultiParamTypeClasses, NamedFieldPuns, OverloadedLists,
+  OverloadedStrings, PatternSynonyms, Rank2Types, RecordWildCards,
+  ScopedTypeVariables, TupleSections, TypeFamilies, TypeOperators,
+  TypeSynonymInstances, PolyKinds, BangPatterns #-}
 
 -- TODO define the API here by exposing it.
 module Monad.StreamsBasedFreeMonad
@@ -91,13 +72,13 @@ module Monad.StreamsBasedFreeMonad
     , makeDestructuringExplicit
     , united
     , Stats
+    , enableStatCollection
     ) where
 
 import Control.Monad
 import Control.Monad.Except
 
 -- import           Control.Monad.Par        as P
-import Control.Arrow ((&&&), first)
 import Control.Monad.RWS as RWS
 import Control.Monad.Reader
 import Control.Monad.State as S
@@ -107,25 +88,23 @@ import Control.Monad.State as S
 -- import Scheduler as P
 -- import Control.DeepSeq
 --
-import Control.Monad.STM
-import Control.Concurrent.STM.TChan
-import Control.Concurrent.Async
 import Control.Concurrent.Chan
 import Control.Concurrent.MVar
 import Control.Exception
 import Control.Monad.Free
+import Control.Concurrent (myThreadId)
 
 -- import           Control.Parallel         (pseq)
 import Control.Applicative
-import Control.Arrow (second)
+import Control.Arrow (first, second)
 import Control.Monad.Loops
 import Data.Default.Class
 import Data.Dynamic2
 import Data.Either (lefts)
-import Data.Foldable (fold)
+import Data.Foldable
 import Data.IORef
 import qualified Data.IntMap as IMap
-import Data.List (find, nub, sortOn,genericLength)
+import Data.List (find, nub, sortOn)
 import qualified Data.Map as Map
 import Data.Maybe
 import Data.Vector (Vector)
@@ -149,9 +128,12 @@ import Ohua.Unit
 import Ohua.Util
 import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
-import System.CPUTime
-import Type.Magic
 import Text.Printf
+import Type.Magic
+import Data.Word (Word64)
+
+import qualified Foundation.Time.StopWatch as F
+import qualified Foundation.Time.Types as F
 
 import Control.Monad.Stream (MonadStream, Reciever, Sender)
 import qualified Control.Monad.Stream as ST
@@ -159,7 +141,14 @@ import Control.Monad.Stream.Chan
 
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as BS
-import Ohua.Serialize.JSON
+import Ohua.Serialize.JSON ()
+
+import Debug.Trace
+import System.IO.Unsafe (unsafePerformIO)
+import GHC.RTS.Flags
+
+
+import Data.Statistics
 
 united :: Lens' s ()
 united f s = const s <$> f ()
@@ -167,9 +156,12 @@ united f s = const s <$> f ()
 logError :: MonadIO m => String -> m ()
 logError = liftIO . hPutStrLn stderr
 
+dumpGraph :: Bool
+dumpGraph = False
+
 -- The free monad
 -- | A unique thing
-data Unique = Unique
+newtype Unique = Unique
     { uniqueToInt :: Int
     } deriving (Ord, Eq)
 
@@ -351,7 +343,7 @@ if_ b then_ else_ = liftF $ If b then_ else_ id
 
 generate ::
        (Typeable a)
-    => (ASTM globalState (Var (Maybe a)))
+    => ASTM globalState (Var (Maybe a))
     -> ASTM globalState (Var (Generator IO a))
 generate f =
     call (liftSf (sfm . pure . fmap forceDynamic)) united =<<
@@ -458,10 +450,12 @@ createAlgo :: MonadStream m => ASTM s (Var a) -> IO (Algorithm s m a)
 createAlgo astm = flip Algorithm dict <$> (dump =<< runCompiler expr)
   where
     (dict, expr) = evaluateAST astm
-    dump a = pure a
-    dump gr = do
-      BS.writeFile "algo-graph" (A.encode gr)
-      error ""
+    dump
+        | dumpGraph =
+            \gr -> do
+                BS.writeFile "algo-graph" (A.encode gr)
+                error ""
+        | otherwise = pure
 
 registerFunction :: NodeType s m -> EvalASTM s m QualifiedBinding
 registerFunction n = do
@@ -522,8 +516,8 @@ defaultFunctionDict =
             pure $ do
                 size <- recieve 0
                 withIsAllowed $ do
-                    void $ sequence $ replicate (pred size) $ recieveUntyped 0
-                    vs <- sequence $ replicate size $ recieveUntyped 1
+                    void $ replicateM (pred size) $ recieveUntyped 0
+                    vs <- replicateM size $ recieveUntyped 1
                     sendUntyped $ injectList vs)
         , ( DFRefs.oneToN
           , StreamProcessor $ do
@@ -531,7 +525,7 @@ defaultFunctionDict =
                 pure $ do
                     size <- recieve 0
                     v <- recieveUntyped 1
-                    withIsAllowed $ sequence_ $ replicate size $ sendUntyped v)
+                    withIsAllowed $ replicateM_ size $ sendUntyped v)
         , ( DFRefs.scope
           , StreamProcessor $
             pure $ do
@@ -585,12 +579,12 @@ defaultFunctionDict =
             pure $ do
                 l@(x:_) <- whileM (recieve 0) (recieveUntyped 1)
                 sendUntyped $
-                    injectFunctor x $ (fromList l :: Generator IO Dynamic))
+                    injectFunctor x (fromList l :: Generator IO Dynamic))
         , ( DFRefs.repeat
           , StreamProcessor $ do
                 stateStore <- liftIO $ newMVar Nothing
                 let recieveVals = recieveWhereUntyped (/= 0)
-                pure $ do
+                pure $
                     withIsAllowed $ do
                         b <- recieve 0
                         if b
@@ -641,7 +635,7 @@ defaultFunctionDict =
                         liftIO (takeMVar chanStore) >>= \case
                             Nothing -> do
                                 c <- liftIO newChan
-                                send $
+                                send
                                     (chanToGenerator c :: Generator IO Dynamic)
                                 pure $ liftIO . writeChan c
                             Just f -> pure f
@@ -893,9 +887,9 @@ recieveUntyped :: MonadStream m => Int -> StreamM m Dynamic
 recieveUntyped i = getInputPort i >>= queryPort i
 
 recieveSource :: MonadStream m => StreamM m a -> Reciever m (Packet a) -> StreamM m a
-recieveSource finish =
+recieveSource finishAction =
     recievePacket >=> \case
-        EndOfStreamPacket -> finish
+        EndOfStreamPacket -> finishAction
         UserPacket u -> pure u
 
 recieveAllUntyped :: MonadStream m => StreamM m (Vector Dynamic)
@@ -955,44 +949,83 @@ instance ApplyVars (SfMonad state retType) where
     applyVars res [] = res
     applyVars _ _ = error "Too many arguments"
 
-collectStats = False
+-- The NOINLINE pragma here is necessary, otherwise the machinery of enabling
+-- and disabling stats does not work properly. This may cause a very tiny
+-- performance reduction. But I think its worth it. I don't force `collectStats`
+-- to be NOINLINE because it is safe to read it from duplicated locations so
+-- long as it still reads from `collectStatsRef`, which is the mutable location
+-- that `enableStatCollection` modifies.
+collectStatsRef :: IORef Bool
+collectStatsRef = unsafePerformIO $ newIORef False
+{-# NOINLINE collectStatsRef #-}
+collectStats :: Bool
+collectStats = unsafePerformIO $ readIORef collectStatsRef
 
-type Stats = Map.Map QualifiedBinding Integer
-type RawStats = [(QualifiedBinding, Integer)]
+enableStatCollection :: IO ()
+enableStatCollection = writeIORef collectStatsRef True
 
 -- | Given a reference for a stateful function run it as a stream
 -- processor
 runFunc ::
        MonadStream m
-    => IORef RawStats
+    => StatCollector
     -> QualifiedBinding
     -> SfRef globalState
     -> globalState
     -> IO (Maybe (globalState -> IO globalState), StreamInit m ())
 runFunc statRef funcName (SfRef (Sf f _) accessor) st = do
     stateRef <- liftIO $ newIORef (st ^. accessor)
+    runCountRef <- liftIO $ newIORef (0 :: Word64)
     pure $
-        (Just $ \s -> readIORef stateRef >>= \a -> pure $ s & accessor .~ a, ) $ pure $ do
+        (Just $ \s -> readIORef stateRef <&> \a -> s & accessor .~ a, ) $
+        pure $ do
             inVars <- recieveAllUntyped
             withIsAllowed $ do
+                traceStep <-
+                    if isTracingRuntime
+                        then do
+                            run <- liftIO $ readIORef runCountRef
+                            tid <- liftIO myThreadId
+                            pure $ \step ->
+                                liftIO $
+                                traceEventIO $
+                                printf
+                                    "%v#%d@%v %v"
+                                    (show funcName)
+                                    run
+                                    (show tid)
+                                    (step :: String)
+                        else pure $ const (return ())
+                statTracker <-
+                    if collectStats
+                        then initCycle
+                        else initNoOpCycle
+                traceStep "starting"
+                when isTracingRuntime $ liftIO $ modifyIORef' runCountRef succ
                 s <- liftIO $ readIORef stateRef
+                read <- mark statTracker
+                traceStep "read state"
                 (ret, newState) <-
                     liftIO $
                     caught $
-                    measured $
                     runStateT (runSfMonad (applyVars f $ V.toList inVars)) s
+                ran <- mark read
+                traceStep "finished user function"
                 liftIO $ writeIORef stateRef newState
-                ret `seq` pure ()
+                written <- mark ran
+                traceStep "wrote state"
+                -- ret `seq` pure ()
                 send ret
+                sent <- mark written
+                when collectStats $ recordCycle statRef funcName sent
   where
-    measured ac
-        | collectStats = do
-            start <- getCPUTime
-            res <- ac
-            end <- getCPUTime
-            atomicModifyIORef_ statRef ((funcName, end - start) :)
-            pure res
-        | otherwise = ac
+    isTracingRuntime =
+        unsafePerformIO $
+        (\case
+             TraceNone -> False
+             _ -> True) .
+        tracing <$>
+        getTraceFlags
     caught ac =
         ac `catch`
         (\e@(ErrorCall _) ->
@@ -1009,25 +1042,21 @@ mountStreamProcessor ::
     -> OutputPort m
     -> m ()
 mountStreamProcessor process ctxInput inputs outputs = do
-    result <-
-        runReaderT
-            (runExceptT $ runStreamM safeProc)
-            (ctxInput, inputs, outputs)
-    case result of
-        Left packetInfo ->
-            case packetInfo of
-                Nothing -> pure ()
-          -- EOS marker appeared, this is what *should* happen
-                Just i ->
-                    error $ "There were packets left over in " ++ i ++
-                    " when a processor exited"
+    runReaderT (runExceptT $ runStreamM safeProc) (ctxInput, inputs, outputs) >>= \case
+        Left Nothing -> pure () -- EOS marker appeared, this is what *should* happen
+        Left (Just i) ->
+            error $
+            "There were packets left over in " ++
+            i ++ " when a processor exited"
         Right () ->
             logError $ "IMPOSSIBLE: operator terminated without exception"
   where
     safeProc = do
         proc_ <- process
         if null inputs && isNothing ctxInput
-            then proc_ >> expectFinish
+            then liftIO (traceEventIO "First execution of a source operator") >>
+                 proc_ >>
+                 expectFinish
             else forever proc_
 
 data ExecutionException =
@@ -1101,14 +1130,6 @@ toOutputManager v
 constants :: Map.Map HostExpr Dynamic
 constants = [(HEConst.true, toDyn True)]
 
-formatStats :: [(QualifiedBinding, Integer)] -> Stats
-formatStats =
-    fmap
-     sum
-     -- (\(xs::[Integer]) -> round $ realToFrac (sum xs) / genericLength xs)
-     . Map.fromListWith (++)
-     . map (second pure)
-
 runAlgo ::
        forall m a globalState. (MonadStream m, Typeable a)
     => Algorithm globalState m a
@@ -1122,18 +1143,21 @@ runAlgoWStats ::
     -> globalState
     -> m (a, Stats)
 runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
-    statRef <- liftIO $ newIORef []
+    statRef <- initStatCollection
     (outMap, funcs) <- foldM f (outputMap, []) operators
     (retSink, retSource) <- ST.createStream
-    let finalMap =
-            fmap toOutputManager $
+    let !finalMap =
+            toOutputManager <$>
             Map.update
                 (Just . ((G.index returnArc, retSink) :))
                 (G.operator returnArc)
                 outMap
-    stateRecovery <- catMaybes . fst . unzip <$>
+    liftIO $ traceEventIO "Beginning mounting operators"
+    clock <- liftIO F.startPrecise
+    _stateRecovery <-
+        mapMaybe fst <$>
         mapM
-            (\(op@(G.Operator {..}), ctxArc, inChans) ->
+            (\(G.Operator {..}, ctxArc, inChans) ->
                  let outChans = finalMap Map.! operatorId
                      operatorCode
                          | nthNS == qbNamespace operatorType =
@@ -1149,26 +1173,39 @@ runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
                              fromMaybe
                                  (error $ "cannot find " ++ show operatorType) $
                              Map.lookup operatorType dict
-
                      initProc =
                          case operatorCode of
-                             CallSf sfRef -> runFunc statRef operatorType sfRef st
-                             StreamProcessor processor' -> pure (Nothing , processor')
-                 in do
+                             CallSf sfRef ->
+                                 runFunc statRef operatorType sfRef st
+                             StreamProcessor processor' ->
+                                 pure (Nothing, processor')
                    -- liftIO $ putStrLn $ "fn: " ++ (show operatorType)
-                   (syncState, processor) <- liftIO initProc
-                   (syncState, ) <$>
-                     ST.spawn
-                         (mountStreamProcessor
-                              processor
-                              ctxArc
-                              (V.fromList inChans)
-                              outChans))
+                  in do (syncState, processor) <- liftIO initProc
+                        (syncState, ) <$>
+                            ST.spawn
+                                (mountStreamProcessor
+                                     processor
+                                     ctxArc
+                                     (V.fromList inChans)
+                                     outChans))
             funcs
+    F.NanoSeconds finishedMounting <- liftIO $ F.stopPrecise clock
     UserPacket ret <- ST.recieve retSource
+    F.NanoSeconds recievedResult <- liftIO $ F.stopPrecise clock
     EndOfStreamPacket <- ST.recieve retSource
-    stats <- liftIO $ readIORef statRef
-    pure (forceDynamic ret, formatStats stats)
+    F.NanoSeconds recievedEOS <- liftIO $ F.stopPrecise clock
+    let systemPhaseAsOp = OpCycle 0 0 0 0
+    recordCycle statRef "system/mounting" (systemPhaseAsOp finishedMounting)
+    recordCycle
+        statRef
+        "system/recieve-result"
+        (systemPhaseAsOp $ recievedResult - finishedMounting)
+    recordCycle
+        statRef
+        "system/recieved-eos"
+        (systemPhaseAsOp $ recievedEOS - recievedResult)
+    stats <- getStats statRef
+    pure (forceDynamic ret, stats)
   where
     outputMap :: Map.Map FnId [(Int, Sender m (Packet Dynamic))]
     outputMap = Map.fromList $ zip (map G.operatorId operators) (repeat [])
