@@ -6,6 +6,7 @@
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE CPP #-}
 module Monad.Generator
     ( IsGenerator(..)
     , liftIO
@@ -71,11 +72,20 @@ data Generator m a
 
 -- You can see the generator in action by running the examples at the bottom in ghci with `runGenerator`
 
+mappendGen :: Functor m => Generator m a -> Generator m a -> Generator m a
+Finished `mappendGen` gen2 = gen2
+NeedM sc `mappendGen` gen2 = NeedM $ (`mappendGen` gen2) <$> sc
+Yield g v `mappendGen` gen2 = Yield (g `mappendGen` gen2) v
+
 instance Functor m => Monoid (Generator m a) where
   mempty = Finished
-  Finished `mappend` gen2 = gen2
-  NeedM sc `mappend` gen2 = NeedM $ (`mappend` gen2) <$> sc
-  Yield g v `mappend` gen2 = Yield (g `mappend` gen2) v
+
+#if MIN_VERSION_base(4,11,0)
+instance Functor m => Semigroup (Generator m a) where
+  (<>) = mappendGen
+#else
+  mappend = mappendGen
+#endif
 
 
 instance Functor m => Functor (Generator m) where

@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, TypeFamilies #-}
+{-# LANGUAGE TemplateHaskell, TypeFamilies, DeriveGeneric #-}
 module Data.Statistics
     ( OpCycle(..)
     , CycleStart
@@ -12,8 +12,10 @@ module Data.Statistics
     , StatCollector
     , initStatCollection
     , recordCycle
+    , OpStat(..)
     , Stats
     , getStats
+    , toStat
     ) where
 
 import Data.Word
@@ -23,6 +25,7 @@ import Ohua.Serialize.JSON ()
 import Data.IORef
 import Control.Monad.IO.Class
 import Data.Foldable
+import GHC.Generics
 
 import qualified Data.Map.Strict as M
 
@@ -35,7 +38,7 @@ data OpCycle = OpCycle
   , writingState :: !Word64
   , sendingResult :: !Word64
   , totalCycleTime :: !Word64
-  }
+  } deriving (Generic)
 
 deriveJSON defaultOptions ''OpCycle
 
@@ -108,7 +111,9 @@ data OpStat = OpStat
   , totalRuns :: Int
   , totalRuntime :: Integer
   , avgRun :: OpCycle
-  }
+  } deriving Generic
+
+deriveJSON defaultOptions ''OpStat
 
 type Stats = [OpStat]
 

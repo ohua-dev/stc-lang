@@ -75,6 +75,9 @@ module Monad.StreamsBasedFreeMonad
     , enableStatCollection
     ) where
 
+import Protolude (toS)
+import qualified Protolude as Pl
+
 import Control.Monad
 import Control.Monad.Except
 
@@ -111,7 +114,7 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Data.Void
 import GHC.Exts (fromList)
-import Lens.Micro
+import Lens.Micro hiding ((<&>))
 import Lens.Micro.Mtl
 import Monad.Generator
 import qualified Ohua.ALang.Lang as L
@@ -126,7 +129,6 @@ import Ohua.ParseTools.Refs (ohuaLangNS)
 import Ohua.Types
 import Ohua.Unit
 import Ohua.Util
-import qualified Ohua.Util.Str as Str
 import System.IO (hPutStrLn, stderr)
 import Text.Printf
 import Type.Magic
@@ -426,7 +428,7 @@ evalASTM ::
     -> (FunctionDict s m, L.Expression -> L.Expression, a)
 evalASTM (EvalASTM ac) = (d, m, a)
   where
-    throwErrs = either (error . Str.toString) id
+    throwErrs = either (error . toS) id
     (a, (d, _, _, _, _), Mutator m) =
         runRWS
             ac
@@ -486,7 +488,7 @@ nthNS :: NSRef
 nthNS = ["ohua", "lang", "nth"]
 
 dN :: Int -> QualifiedBinding
-dN i = QualifiedBinding nthNS (makeThrow $ Str.showS i)
+dN i = QualifiedBinding nthNS (makeThrow $ Pl.show i)
 
 captureSingleton :: QualifiedBinding
 captureSingleton = QualifiedBinding ohuaLangNS "captureSingleton"
@@ -754,7 +756,7 @@ makeDestructuringExplicit G.OutGraph {G.operators, G.arcs, G.returnArc} =
 
 runCompiler :: L.Expression -> IO G.OutGraph
 runCompiler =
-    fmap (either (error . Str.toString) makeDestructuringExplicit) . runExceptT .
+    fmap (either (error .toS) makeDestructuringExplicit) . runExceptT .
     runStderrLoggingT .
     filterLogger (const (>= LevelError)) .
     compile def def {passAfterDFLowering = cleanUnits}
@@ -1046,10 +1048,11 @@ mountStreamProcessor process ctxInput inputs outputs = do
         Left Nothing -> pure () -- EOS marker appeared, this is what *should* happen
         Left (Just i) ->
             error $
-            "There were packets left over in " ++
-            i ++ " when a processor exited"
+            printf
+                "There were packets left over in port %d when a processor exited"
+                i
         Right () ->
-            logError $ "IMPOSSIBLE: operator terminated without exception"
+            logError "IMPOSSIBLE: operator terminated without exception"
   where
     safeProc = do
         proc_ <- process
@@ -1066,7 +1069,7 @@ data ExecutionException =
 prettyExecutionException :: ExecutionException -> String
 prettyExecutionException (ExecutionException errors) =
     unlines
-        [ Str.intercalate
+        [ Pl.intercalate
             "\n  "
             ((e ++ " in ") :
              map showOp (take maxNumExceptionSources opList) ++
@@ -1167,7 +1170,7 @@ runAlgoWStats (Algorithm g@G.OutGraph {..} dict) st = do
                                  sendUntyped $
                                      input V.!
                                      read
-                                         (Str.toString . unwrap $
+                                         (toS $ unwrap $
                                           qbName operatorType)
                          | otherwise =
                              fromMaybe
