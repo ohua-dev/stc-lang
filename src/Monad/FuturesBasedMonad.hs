@@ -407,16 +407,20 @@ case_ cond patternsAndBranches = OhuaM moveState comp
 --                return r02
 --
 -- runOhua m s
-type STCLang a = State [S] (OhuaM a)
+type STCLang a = StateT [S] IO (OhuaM a)
 
-liftWithState :: s -> (a -> s b) -> STCLang b
-liftWithState state stateThread = do
-  gs <- get
-  let l = length gs
-  put $ gs ++ [state]
-  liftWithIndex l stateThread
+liftWithState ::
+       (Typeable s, NFData a, NFData s, Show a)
+    => IO s
+    -> (a -> StateT s IO b)
+    -> a
+    -> STCLang b
+liftWithState state stateThread a = do
+    s0 <- lift state
+    l <- S.state $ \s -> (length s, s ++ [toS s0])
+    pure $ liftWithIndex l stateThread a
 
 runSTCLang :: (NFData a) => STCLang a -> IO (a, [S])
-runSTCLang langComp =
-  let (comp,gs) = S.runState [] langComp
-  runOhuaM comp gs
+runSTCLang langComp = do
+    (comp,gs) <- S.runStateT langComp []
+    runOhuaM comp gs
