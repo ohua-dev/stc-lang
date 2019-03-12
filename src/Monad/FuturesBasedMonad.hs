@@ -20,6 +20,9 @@ module Monad.FuturesBasedMonad
   , SFM
   , runOhuaM
   , OhuaM
+  , runSTCLang
+  , liftWithState
+  , smapSTC
   ) where
 
 import Control.Monad
@@ -331,7 +334,7 @@ smapGen ::
   -> Generator IO a
   -> OhuaM [b]
 smapGen algo gen =
-  OhuaM moveState $ \g@(GlobalState gsIn gsOut) -> do
+  OhuaM moveState $ \g@(GlobalState gsIn gsOut) ->
     liftIO (step gen) >>= \case
       Nothing -> fmap (([] :: [b]), ) $ moveState g
       Just (a, gen') -> do
@@ -407,20 +410,26 @@ case_ cond patternsAndBranches = OhuaM moveState comp
 --                return r02
 --
 -- runOhua m s
-type STCLang a = StateT [S] IO (OhuaM a)
+type STCLang a b = StateT [S] IO (a -> OhuaM b)
 
 liftWithState ::
        (Typeable s, NFData a, NFData s, Show a)
     => IO s
     -> (a -> StateT s IO b)
-    -> a
-    -> STCLang b
-liftWithState state stateThread a = do
+    -> STCLang a b
+liftWithState state stateThread = do
     s0 <- lift state
     l <- S.state $ \s -> (length s, s ++ [toS s0])
-    pure $ liftWithIndex l stateThread a
+    pure $ liftWithIndex l stateThread
 
-runSTCLang :: (NFData a) => STCLang a -> IO (a, [S])
-runSTCLang langComp = do
+runSTCLang :: (NFData a, NFData b) => STCLang a b -> a -> IO (b, [S])
+runSTCLang langComp a = do
     (comp,gs) <- S.runStateT langComp []
-    runOhuaM comp gs
+    runOhuaM (comp a) gs
+
+
+smapSTC ::
+     forall a b. (NFData b, Show a)
+  => STCLang a b
+  -> STCLang [a] [b]
+smapSTC comp = smap <$> comp

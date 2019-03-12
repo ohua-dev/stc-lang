@@ -28,7 +28,8 @@ main =
         defaultMainWithOpts
         mempty
         -- [PFBM.testSuite]
-        [PSBFM.testSuite]
+        --[PSBFM.testSuite]
+        [FBM.testSuite]
         -- [STM.testSuite]
         -- [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
