@@ -477,3 +477,19 @@ runSignals comp = do
             writeChan chan $ Just (idx, event)
     let signalGen = chanToGenerator chan
     runOhuaM (smapGen comp' signalGen) $ states s
+
+-- | @filter init p f@ applies @f@ to only those values @a@ that satisfy the
+-- predicate @p@. For values not satisfying it returns the last computed value
+-- (initially @init@)
+filterSignal ::
+       (Show b, Typeable b, NFData b, NFData a)
+    => IO b -- Initial value for the output
+    -> (a -> OhuaM Bool) -- predicate
+    -> (a -> OhuaM b) -- computation to perform on `a`
+    -> STCLang a b
+filterSignal init cond f = do
+    g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
+    return $ \item -> do
+        r <- cond item
+        i <- case_ r [(True, Just <$> f item), (False, pure Nothing)]
+        g i
