@@ -24,6 +24,9 @@ module Monad.FuturesBasedMonad
   , runSTCLang
   , liftWithState
   , smapSTC
+  , liftSignal
+  , runSignals
+  , filterSignal
   ) where
 
 import Control.Monad
