@@ -15,18 +15,21 @@ module Monad.FuturesBasedMonad
   ( smap
   , smapGen
   , case_
+  , if_
   , liftWithIndex
   , liftWithIndex'
   , SF
   , SFM
   , runOhuaM
   , OhuaM
+  , STCLang
   , runSTCLang
   , liftWithState
   , smapSTC
   , liftSignal
   , runSignals
   , filterSignal
+  , filterSignalM
   ) where
 
 import Control.Monad
@@ -481,6 +484,15 @@ runSignals comp = do
     let signalGen = chanToGenerator chan
     runOhuaM (smapGen comp' signalGen) $ states s
 
+if_ :: (Show a, NFData a) => OhuaM Bool -> OhuaM a -> OhuaM a -> OhuaM a
+if_ cond then_ else_ = do
+    i <- cond
+    case_ i [(True, then_), (False, else_)]
+
+filterSignalM :: (Show b, NFData a, NFData b) => (a -> OhuaM Bool) -> (a -> OhuaM b) -> STCLang a (Maybe b)
+filterSignalM cond f =
+    pure $ \item -> if_ (cond item) (Just <$> f item) (pure Nothing)
+
 -- | @filter init p f@ applies @f@ to only those values @a@ that satisfy the
 -- predicate @p@. For values not satisfying it returns the last computed value
 -- (initially @init@)
@@ -492,7 +504,5 @@ filterSignal ::
     -> STCLang a b
 filterSignal init cond f = do
     g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
-    return $ \item -> do
-        r <- cond item
-        i <- case_ r [(True, Just <$> f item), (False, pure Nothing)]
-        g i
+    fil <- filterSignalM cond f
+    return $ fil >=> g

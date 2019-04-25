@@ -186,6 +186,23 @@ executable streams-based-monad-exe
   build-depends: base, statefulness
   default-language: Haskell2010
 
+executable stream-bench
+  hs-source-dirs:      stream-bench
+  main-is:             algo.hs
+  build-depends:       base
+                     , statefulness
+                     , hashtables
+                     , text
+                     , deepseq
+                     , hashable
+                     , time
+                     , mtl
+                     , aeson
+                     , bytestring
+  other-modules:       MutableNFMap
+                     , CampaignProcMap
+                     , MutableSet
+
 source-repository head
   type:     git
   location: https://bitbucket.org/nrink/statefulness
