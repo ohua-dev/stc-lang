@@ -18,8 +18,8 @@ newtype Map k v = Map
 instance NFData (Map k v) where
     rnf _ = ()
 
-new :: IO (Map k v)
-new = Map <$> MHT.new
+new :: MonadIO m => m (Map k v)
+new = liftIO $ Map <$> MHT.new
 
 -- | I only require an 'NFData' instance for the values, because the assumption
 -- is that calculating the hash for the keys will force them.

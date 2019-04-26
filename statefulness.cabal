@@ -199,6 +199,9 @@ executable stream-bench
                      , mtl
                      , aeson
                      , bytestring
+                     , hedis
+                     , uuid-types
+                     , random
   other-modules:       MutableNFMap
                      , CampaignProcMap
                      , MutableSet
