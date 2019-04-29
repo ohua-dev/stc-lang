@@ -1,45 +1,58 @@
-{-# LANGUAGE LambdaCase, ConstraintKinds, TupleSections, TypeApplications,
-  OverloadedStrings, PartialTypeSignatures, FlexibleContexts, DeriveGeneric,
-  TypeSynonymInstances #-}
+{-# LANGUAGE LambdaCase, ConstraintKinds, TupleSections,
+  TypeApplications, OverloadedStrings, PartialTypeSignatures,
+  FlexibleContexts, DeriveGeneric, TypeSynonymInstances #-}
 
-import Prelude hiding (String, show)
-import qualified Prelude as P
 import qualified CampaignProcMap as CPM
+import Control.Concurrent (threadDelay)
+import Control.DeepSeq (NFData)
+import Control.Exception (assert, bracket)
 import Control.Monad ((<=<), (>=>), join, unless)
+import Control.Monad.IO.Class
+import Control.Monad.State.Class (MonadState, get, gets, modify, put)
+import Data.Aeson ((.:), decode)
+import qualified Data.Aeson as AE
+import Data.Aeson.Types (parseMaybe)
+import Data.Bifunctor
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as LBS
+import Data.ByteString.Lazy (ByteString)
 import qualified Data.HashTable.IO as MHT
+import Data.Hashable
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
+import Data.Monoid ((<>))
 import Data.Text (Text)
 import qualified Data.Text as Tx
 import qualified Data.Text.Encoding as Tx
 import Data.Time.Clock (getCurrentTime)
+import Data.Typeable (Typeable)
+import qualified Data.UUID.Types as UUID
 import Data.Void
+import qualified Data.Yaml as Yaml
+import GHC.Generics (Generic)
+import Lens.Micro
+import Lens.Micro.Aeson
 import Monad.FuturesBasedMonad
 import qualified MutableNFMap as NFMap
 import qualified MutableSet as Set
-import Data.Int (Int64)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Control.Concurrent (threadDelay)
-import Control.Monad.State.Class (MonadState, get, gets, put, modify)
-import Data.Bifunctor
-import Control.Monad.IO.Class
-import Data.Aeson ((.:), decode)
-import qualified Data.Aeson as AE
-import Data.Aeson.Types (parseMaybe)
-import Data.Maybe (fromMaybe)
-import Data.Typeable (Typeable)
-import Control.DeepSeq (NFData)
-import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Lazy as LBS
-import Data.ByteString.Lazy (ByteString)
-import Data.Hashable
-import GHC.Generics
-import qualified Database.Redis as Redis
-import qualified Data.UUID.Types as UUID
+import Prelude hiding (String, show)
+import qualified Prelude as P
 import System.Random (randomIO)
+import System.Environment
+
+import qualified Database.Redis as Redis
+
+import qualified Kafka.Consumer as K
 
 type String = BS.ByteString
+
 type DeserializeS = Void
-type Message = ByteString
+
+type Message = BS.ByteString
+
 type Long = Int64
+
 data Window = Window
     { seenCount :: IORef Long
     , timestamp :: Text
@@ -48,10 +61,13 @@ data Window = Window
 instance Hashable Window where
     hashWithSalt s w = hashWithSalt s (timestamp w)
 
-instance NFData Window where
+instance NFData Window
 
 instance AE.FromJSON String where
     parseJSON = AE.withText "Expected String" $ pure . Tx.encodeUtf8
+
+fromRight :: Show a => Either a b -> b
+fromRight = either (error . P.show) id
 
 show :: Show a => a -> Text
 show = Tx.pack . P.show
@@ -60,13 +76,26 @@ timeDivisor :: Long
 timeDivisor = 10000
 
 timeout :: Int
-timeout = 1000*000
+timeout = 1000 * 000
 
-readKafka :: IO Message
-readKafka = undefined
+-- NOTE I guessed this number. I have not seen any timeout specification in the
+-- benchmark. This is in milliseconds.
+kafkaTimeout :: K.Timeout
+kafkaTimeout = K.Timeout 400
+
+readKafka :: _ -> IO Message
+readKafka con = do
+    record <- fromRight <$> K.pollMessage con kafkaTimeout
+    assert (K.crKey record == Nothing) (pure ()) -- I just put this in hear for now so that
+                                      -- we can reason better about the
+                                      -- structure of the kafka message
+    case K.crKey record of
+        Nothing -> error "Empty response from Kafka"
+        Just msg -> pure msg
 
 getIndex :: Int -> [a] -> Maybe a
-getIndex n _ | n < 0 = Nothing
+getIndex n _
+    | n < 0 = Nothing
 getIndex _ [] = Nothing
 getIndex 0 (x:_) = Just x
 getIndex n (_:xs) = getIndex (n - 1) xs
@@ -109,15 +138,15 @@ writeRedis campaign window = do
 
 redisGet :: MonadIO m => _ -> BS.ByteString -> m (Maybe BS.ByteString)
 redisGet redisConn =
-    liftIO .
-    Redis.runRedis redisConn . fmap (either (error . P.show) id) . Redis.get
+    liftIO . Redis.runRedis redisConn . fmap fromRight . Redis.get
 
 isTheSame :: (Show a, Typeable a, Eq a, NFData a) => IO a -> STCLang a Bool
-isTheSame init = liftWithState init $ \new -> do
-    old <- get
-    let isOld = old == new
-    unless isOld $ put new
-    pure $ old == new
+isTheSame init =
+    liftWithState init $ \new -> do
+        old <- get
+        let isOld = old == new
+        unless isOld $ put new
+        pure $ old == new
 
 redisJoinStateInit :: IO (NFMap.Map _ _)
 redisJoinStateInit = NFMap.new
@@ -135,10 +164,6 @@ newWindow timeBucket =
 redisGetWindow :: MonadIO m => Long -> m (Maybe Window)
 redisGetWindow timeBucket = Just <$> newWindow timeBucket
 
--- NOTE As I describe below `keyBy` partitions the operator state along the
--- campaign id. For the flush set I use a hashmap on the campaign id to recreate
--- that behaviour. However for the windows there is already some splitting along
--- the campaign id, so I presume its okay not to split it again.
 getWindow ::
        (MonadIO m, MonadState (w, NFMap.Map Long (NFMap.Map String Window)) m)
     => Long
@@ -171,17 +196,38 @@ getWindow timeBucket campaignId = do
                     pure window
                 Just window -> pure window
 
+-- | Reads the config file at the specified path and creates the connection
+-- objects we need
+setup :: FilePath -> IO (K.KafkaConsumer, Redis.Connection)
+setup loc = do
+    conf <- fromRight <$> Yaml.decodeFileEither @AE.Value loc
+    let kafkaOpts = conf ^?! key "kafka" :: AE.Value
+        sub = K.topics [K.TopicName $ kafkaOpts ^?! key "topic" . _String]
+        props =
+            K.brokersList $
+            map
+                (K.BrokerAddress .
+                 (<> show (kafkaOpts ^?! key "port" . _Number)))
+                (kafkaOpts ^.. key "brokers" . values . _String)
+        rinfo =
+            Redis.defaultConnectInfo
+                { Redis.connectHost =
+                      conf ^?! key "redis" . key "host" . _String . to Tx.unpack
+                }
+    (,) <$> fmap fromRight (K.newConsumer props sub) <*>
+        Redis.checkedConnect rinfo
+
 -- NOTE in the original implementation of the algorithm `rebalance` is the first
 -- function called on the input stream. This distributes the messages
 -- round-robin. This means we could also spawn multiple algorithm instances and
 -- process multiple messages in parallel. But we'd have to ensure the timer
 -- events are *not* round robin distributed!
-algo redisConn
+algo kafkaConsumer redisConn
     -- Allocate the basic functions --
  = do
     let deserialize o =
             fromMaybe (error "Decoding error") $ do
-                result <- decode o
+                result <- decode $ LBS.fromStrict o
                 flip parseMaybe result $ \o ->
                     (,,,,,,) <$> (o .: "user_id" :: _ String) <*>
                     (o .: "page_id" :: _ String) <*>
@@ -220,8 +266,7 @@ algo redisConn
                 s <- gets fst
                 newCache <- liftIO Set.new
                 modify (\(_, o) -> (newCache, o))
-                liftIO $
-                    Redis.runRedis redisConn $
+                liftIO $ Redis.runRedis redisConn $
                     Set.mapM_
                         (\(cid, window) ->
                              Redis.runRedis redisConn $ writeRedis cid window)
@@ -232,12 +277,13 @@ algo redisConn
     -- Allocate signals
     timerSig <-
         liftSignal (threadDelay timeout >> getCurrentTime) getCurrentTime
-    msgSig <- liftSignal readKafka (pure undefined)
+    -- Not sure if this is a good idea but I initialize here by polling the
+    -- first message. Perhaps we should use a `Maybe` instead, however its not
+    -- particularly convenient yet in our model so I do this.
+    msgSig <- liftSignal (readKafka kafkaConsumer) (readKafka kafkaConsumer)
     filteredProcessor
-        -- NOTE keyBy partitions the operator state according to some key. I did
-        -- not immediately see a simple way to implement this in our sytem.
-        -- That's why, for now I ignore keyBy and implement it instead using a
-        -- HashMap in the processor function
+        -- NOTE keyBy partitions the operator state according to some key. If we
+        -- have time we should implement that too
          <-
         filterSignalM
             evFilterFunc
@@ -258,4 +304,12 @@ algo redisConn
                      join <$> filteredProcessor msg)
         processCampaign procInput
 
-main = return ()
+main = do
+    [confPath] <- getArgs
+    bracket
+        (setup confPath)
+        (\(kafkaConn, redisConn) -> do runSignals (algo kafkaConn redisConn))
+        (\(kafkaConn, redisConn) -> do
+             K.closeConsumer kafkaConn
+             -- Redis.disconnect redisConn
+        )

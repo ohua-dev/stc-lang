@@ -202,6 +202,10 @@ executable stream-bench
                      , hedis
                      , uuid-types
                      , random
+                     , hw-kafka-client
+                     , microlens-aeson
+                     , microlens
+                     , yaml
   other-modules:       MutableNFMap
                      , CampaignProcMap
                      , MutableSet
