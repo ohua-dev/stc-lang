@@ -1,19 +1,23 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TupleSections #-}
 
 import Control.Concurrent
 import Control.DeepSeq
+import Control.Monad ((>=>))
+import Control.Monad.State.Lazy (get, put)
 import Criterion
 import Criterion.IO
-import Criterion.Main
 import Criterion.Internal
-import Criterion.Types (verbosity, Verbosity(Quiet))
+import Criterion.Main
+import Criterion.Types (Verbosity(Quiet), verbosity)
 import Data.StateElement
 import Data.Time.Clock.POSIX
 import Data.Word
 import Monad.FuturesBasedMonad
 import System.IO (stdout)
-import Control.Monad.State.Lazy (get, put)
-import Control.Monad ((>=>))
+
+import Control.Monad.Par (runPar)
+import Control.Monad.Par.Combinator (parMap)
 
 work = 100000
 
@@ -25,7 +29,6 @@ sin_iter 0 x = x
 sin_iter n !x = sin_iter (n - 1) (x + sin x)
 
 -- Four versions: sequential (no ohua), stateless, stateful, only reading
-
 {-# INLINE sequential #-}
 sequential = sin_iter work . sin_iter work
 
@@ -36,33 +39,123 @@ expensiveComputation = pure . sin_iter work
 {-# INLINE readingExpensiveComputation #-}
 readingExpensiveComputation :: Float -> SFM Float Float
 readingExpensiveComputation i = do
-    s <- get
-    expensiveComputation $ i + s
+  s <- get
+  expensiveComputation $ i + s
 
 {-# INLINE writingExpensiveComputation #-}
 writingExpensiveComputation :: Float -> SFM Float Float
 writingExpensiveComputation i = do
-    s <- get
-    r <- expensiveComputation $ i + s
-    put r
-    pure r
+  s <- get
+  r <- expensiveComputation $ i + s
+  put r
+  pure r
 
-{-# INLINE comp #-}
-comp g coll= runOhuaM (smap (f >=> h) coll) [toS (4.0 :: Float), toS (3.0 :: Float)]
+app x = (sin_iter work x, sin_iter work x)
+
+condition = (`mod` 2) . (`div` 10) . round
+
+cond x =
+  if condition x == 0
+    then sin_iter work x
+    else sin_iter work x
+
+--
+-- Ohua
+--
+{-# INLINE compOhua #-}
+compOhua g coll =
+  runOhuaM (smap (f >=> h) coll) [toS (4.0 :: Float), toS (3.0 :: Float)]
   where
     f = liftWithIndex 0 g
     h = liftWithIndex 1 g
 
+{-# INLINE appOhua #-}
+appOhua g coll =
+  runOhuaM
+    (smap (\x -> (,) <$> f x <*> h x) coll)
+    [toS (4.0 :: Float), toS (3.0 :: Float)]
+  where
+    f = liftWithIndex 0 g
+    h = liftWithIndex 1 g
+
+caseComp branch1 branch2 x = do
+  c <- pure $ condition x
+  o <- case_ c [(0, branch1 x), (1, branch2 x)]
+  return o
+
+{-# INLINE condOhua #-}
+condOhua g coll =
+  runOhuaM (smap (caseComp f h) coll) [toS (4.0 :: Float), toS (3.0 :: Float)]
+  where
+    f = liftWithIndex 0 g
+    h = liftWithIndex 1 g
+
+--
+-- Monad Par
+--
+{-# INLINE compPar1 #-}
+compPar1 g coll = runPar $ (parMap g >=> parMap g) coll
+
+{-# INLINE compPar2 #-}
+compPar2 g coll = runPar $ (parMap $ g . g) coll
+
+{-# INLINE appPar #-}
+appPar g coll = runPar $ (,) <$> parMap g coll <*> parMap g coll
+
+{-# INLINE condPar #-}
+condPar g coll =
+  runPar $
+  parMap
+    (\x ->
+       if condition x == 0
+         then g x
+         else g x)
+    coll
+
+--
+-- Strategies
+--
 {-# NOINLINE testData #-}
 testData = take 50 $ iterate (+ 10.0) 400.0
 
 cores = [1 .. 4]
 
-main =
-    defaultMainWith
-        defaultConfig
-        [ bench "sequential" (nf (map sequential) testData)
-        , bench "pure" (nfIO $ comp expensiveComputation testData)
-        , bench "reading" (nfIO $ comp readingExpensiveComputation testData)
-        , bench "writing" (nfIO $ comp writingExpensiveComputation testData)
-        ]
+ohuaBenchmark =
+  defaultMainWith
+    defaultConfig
+    [ bench "sequential" (nf (map sequential) testData)
+    , bench "pure" (nfIO $ compOhua expensiveComputation testData)
+    , bench "reading" (nfIO $ compOhua readingExpensiveComputation testData)
+    , bench "writing" (nfIO $ compOhua writingExpensiveComputation testData)
+    ]
+
+compBenchmark =
+  defaultMainWith
+    defaultConfig
+    [ bench "sequential" (nf (map sequential) testData)
+    , bench "ohua" (nfIO $ compOhua expensiveComputation testData)
+    , bench "par1" (nf (compPar1 $ sin_iter work) testData)
+    , bench "par2" (nf (compPar2 $ sin_iter work) testData)
+    ]
+
+appBenchmark =
+  defaultMainWith
+    defaultConfig
+    [ bench "sequential" (nf (map app) testData)
+    , bench "ohua" (nfIO $ appOhua expensiveComputation testData)
+    , bench "par" (nf (appPar $ sin_iter work) testData)
+    ]
+
+condBenchmark =
+  defaultMainWith
+    defaultConfig
+    [ bench "sequential" (nf (map cond) testData)
+    , bench "ohua" (nfIO $ condOhua expensiveComputation testData)
+    , bench "par" (nf (condPar $ sin_iter work) testData)
+    ]
+
+main = do
+  ohuaBenchmark
+  compBenchmark
+  appBenchmark
+  condBenchmark
