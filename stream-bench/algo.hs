@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase, ConstraintKinds, TupleSections, TypeApplications,
-  OverloadedStrings, PartialTypeSignatures, FlexibleContexts, DeriveGeneric #-}
+  OverloadedStrings, PartialTypeSignatures, FlexibleContexts, DeriveGeneric,
+  TypeSynonymInstances #-}
 
 import Prelude hiding (String, show)
 import qualified Prelude as P
@@ -21,6 +22,7 @@ import Control.Monad.State.Class (MonadState, get, gets, put, modify)
 import Data.Bifunctor
 import Control.Monad.IO.Class
 import Data.Aeson ((.:), decode)
+import qualified Data.Aeson as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.Maybe (fromMaybe)
 import Data.Typeable (Typeable)
@@ -34,7 +36,7 @@ import qualified Database.Redis as Redis
 import qualified Data.UUID.Types as UUID
 import System.Random (randomIO)
 
-type String = Text
+type String = BS.ByteString
 type DeserializeS = Void
 type Message = ByteString
 type Long = Int64
@@ -47,6 +49,9 @@ instance Hashable Window where
     hashWithSalt s w = hashWithSalt s (timestamp w)
 
 instance NFData Window where
+
+instance AE.FromJSON String where
+    parseJSON = AE.withText "Expected String" $ pure . Tx.encodeUtf8
 
 show :: Show a => a -> Text
 show = Tx.pack . P.show
@@ -66,43 +71,46 @@ getIndex _ [] = Nothing
 getIndex 0 (x:_) = Just x
 getIndex n (_:xs) = getIndex (n - 1) xs
 
-writeRedis :: _
-writeRedis redisConn campaign window =
-    Redis.runRedis redisConn $ do
-        redisResponse <- getUUID (Tx.encodeUtf8 $ timestamp window)
-        windowUUID <-
-            case redisResponse of
-                Nothing -> do
-                    windowUUID <-
-                        LBS.toStrict . UUID.toByteString <$> liftIO randomIO
-                    Redis.hset campaign (Tx.encodeUtf8 $ timestamp window) windowUUID
-                    redisResponse2 <- getUUID "windows"
-                    windowListUUID <-
-                        case redisResponse2 of
-                            Nothing -> do
-                                rand <-
-                                    LBS.toStrict . UUID.toByteString <$>
-                                    liftIO randomIO
-                                Redis.hset campaign "windows" rand
-                                pure rand
-                            Just uuid -> pure uuid
-                    Redis.lpush windowListUUID [Tx.encodeUtf8 $ timestamp window]
-                    pure windowUUID
-                Just uuid -> pure uuid
-        Redis.hincrby windowUUID "seen_count" . fromIntegral =<<
-            liftIO (readIORef (seenCount window))
-        liftIO $ writeIORef (seenCount window) 0
-        time <- BS.pack . P.show <$> liftIO getCurrentTime
-        Redis.hset windowUUID "time_updated" time
-        Redis.lpush "time_updated" [time]
+writeRedis :: _ -> _ -> Redis.Redis _
+writeRedis campaign window = do
+    redisResponse <- getUUID (Tx.encodeUtf8 $ timestamp window)
+    windowUUID <-
+        case redisResponse of
+            Nothing -> do
+                windowUUID <-
+                    LBS.toStrict . UUID.toByteString <$> liftIO randomIO
+                Redis.hset
+                    campaign
+                    (Tx.encodeUtf8 $ timestamp window)
+                    windowUUID
+                redisResponse2 <- getUUID "windows"
+                windowListUUID <-
+                    case redisResponse2 of
+                        Nothing -> do
+                            rand <-
+                                LBS.toStrict . UUID.toByteString <$>
+                                liftIO randomIO
+                            Redis.hset campaign "windows" rand
+                            pure rand
+                        Just uuid -> pure uuid
+                Redis.lpush windowListUUID [Tx.encodeUtf8 $ timestamp window]
+                pure windowUUID
+            Just uuid -> pure uuid
+    Redis.hincrby windowUUID "seen_count" . fromIntegral =<<
+        liftIO (readIORef (seenCount window))
+    liftIO $ writeIORef (seenCount window) 0
+    time <- BS.pack . P.show <$> liftIO getCurrentTime
+    Redis.hset windowUUID "time_updated" time
+    Redis.lpush "time_updated" [time]
   where
     getUUID field =
         either (const Nothing) (join . getIndex 1) <$>
         Redis.hmget campaign [field]
 
-redisGet :: MonadIO m => _ -> Text -> m (Maybe Text)
+redisGet :: MonadIO m => _ -> BS.ByteString -> m (Maybe BS.ByteString)
 redisGet redisConn =
-    fmap (either Nothing Just) . Redis.runRedis redisConn . Redis.get
+    liftIO .
+    Redis.runRedis redisConn . fmap (either (error . P.show) id) . Redis.get
 
 isTheSame :: (Show a, Typeable a, Eq a, NFData a) => IO a -> STCLang a Bool
 isTheSame init = liftWithState init $ \new -> do
@@ -111,7 +119,7 @@ isTheSame init = liftWithState init $ \new -> do
     unless isOld $ put new
     pure $ old == new
 
-redisJoinStateInit :: IO (NFMap.Map Text Text)
+redisJoinStateInit :: IO (NFMap.Map _ _)
 redisJoinStateInit = NFMap.new
 
 newWindow :: MonadIO m => Long -> m Window
@@ -200,19 +208,24 @@ algo redisConn
     -- The campaign processor wrapped in the logic to separate handling of the
     -- timing event, regular and filtered data.
     processCampaign <-
-        liftWithState ((,) <$> CPM.new <*> NFMap.new) $ \case
+        liftWithState ((,) <$> Set.new <*> NFMap.new) $ \case
             Right (Just (campaignId, _adId, eventTime)) -> do
                 flushCache <- gets fst
                 let timeBucket = eventTime `div` timeDivisor
                 window <- getWindow timeBucket campaignId
                 liftIO $ modifyIORef' (seenCount window) (+ 1)
                 let value = (campaignId, window)
-                CPM.insert campaignId value flushCache
+                Set.insert value flushCache
             Left timerTrigger -> do
                 s <- gets fst
-                newCache <- liftIO CPM.new
+                newCache <- liftIO Set.new
                 modify (\(_, o) -> (newCache, o))
-                CPM.mapM_ writeRedis s
+                liftIO $
+                    Redis.runRedis redisConn $
+                    Set.mapM_
+                        (\(cid, window) ->
+                             Redis.runRedis redisConn $ writeRedis cid window)
+                        s
             _ -> pure ()
     -- The condition we will use later for the if
     evCheck <- isTheSame getCurrentTime

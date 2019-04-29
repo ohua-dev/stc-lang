@@ -1,26 +1,39 @@
 {-# language ConstraintKinds #-}
-module MutableSet (Set, Constraint, new, delete, insert, member) where
+module MutableSet
+    ( Set
+    , Constraint
+    , new
+    , delete
+    , insert
+    , member
+    , mapM_
+    ) where
 
+import Prelude hiding (mapM_)
 import qualified Data.HashTable.IO as HT
 import Data.Hashable (Hashable)
 import Control.DeepSeq
 import Data.Maybe (isJust)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 
 type HashSetInner a = HT.BasicHashTable a ()
 newtype Set a = Set { unwrap :: HashSetInner a }
 type Constraint a = (Hashable a, Eq a)
 
-new :: IO (Set a)
-new = Set <$> HT.new
+new :: MonadIO m => m (Set a)
+new = liftIO $ Set <$> HT.new
 
-insert :: Constraint a => a -> Set a -> IO ()
-insert item t = HT.insert (unwrap t) item ()
+insert :: (MonadIO m, Constraint a) => a -> Set a -> m ()
+insert item t = liftIO $ HT.insert (unwrap t) item ()
 
-delete :: Constraint a => a -> Set a -> IO ()
-delete = flip (HT.delete . unwrap)
+delete :: (MonadIO m, Constraint a) => a -> Set a -> m ()
+delete item set = liftIO $ HT.delete (unwrap set) item
 
-member :: Constraint a => a -> Set a -> IO Bool
-member i t = isJust <$> HT.lookup (unwrap t) i
+member :: (MonadIO m, Constraint a) => a -> Set a -> m Bool
+member i t = liftIO $ isJust <$> HT.lookup (unwrap t) i
+
+mapM_ :: MonadIO m => (a -> IO b) -> Set a -> m ()
+mapM_ f = liftIO . HT.mapM_ (f . fst) . unwrap
 
 -- This is a weird NFData instance, but the assumption is that HashMaps are
 -- strict in the keys, because computing the hash forces the key. And since a
