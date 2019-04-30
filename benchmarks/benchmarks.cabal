@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: d6ce700b71665ca45bd4e71d078823661c5ecee0d9d7375a7b20671e3e3c887e
+-- hash: 2578344c319b18b9d6c83a71e6aaa854999e02fc65ae69c44f57f2edfba79a2a
 
 name:           benchmarks
 version:        0.1.0.0
@@ -20,6 +20,7 @@ library
     , base >=4.7 && <5
     , bytestring
     , criterion
+    , hashmap
     , monad-par
     , process
     , statefulness
@@ -35,6 +36,7 @@ executable benchmarks
     , base >=4.7 && <5
     , bytestring
     , criterion
+    , hashmap
     , monad-par
     , process
     , statefulness

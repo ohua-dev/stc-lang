@@ -9,6 +9,7 @@ dependencies:
   - bytestring
   - process
   - vector
+  - hashmap
 library:
   source-dirs: src # This folder is for shared modules
 
