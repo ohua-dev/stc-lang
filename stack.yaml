@@ -37,6 +37,7 @@ resolver: lts-10.4
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - .
+- benchmarks/
 - location:
     git: git@github.com:ohua-dev/ohua-core
     commit: 843bcdca4abc1393076e3ae69d750af095ed7d59

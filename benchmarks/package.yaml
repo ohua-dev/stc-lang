@@ -1,0 +1,17 @@
+name:                benchmarks
+version:             0.1.0.0
+dependencies:
+  - base >= 4.7 && < 5
+  - monad-par
+  - statefulness
+  - criterion
+  - aeson
+  - bytestring
+  - process
+  - vector
+library:
+  source-dirs: src # This folder is for shared modules
+
+executables:
+  benchmarks:
+    main: src/fbm_parallelism_runner.hs

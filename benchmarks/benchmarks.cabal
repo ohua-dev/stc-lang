@@ -1,0 +1,42 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.1.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: d6ce700b71665ca45bd4e71d078823661c5ecee0d9d7375a7b20671e3e3c887e
+
+name:           benchmarks
+version:        0.1.0.0
+build-type:     Simple
+
+library
+  other-modules:
+      Paths_benchmarks
+  hs-source-dirs:
+      src
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , criterion
+    , monad-par
+    , process
+    , statefulness
+    , vector
+  default-language: Haskell2010
+
+executable benchmarks
+  main-is: src/fbm_parallelism_runner.hs
+  other-modules:
+      Paths_benchmarks
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , bytestring
+    , criterion
+    , monad-par
+    , process
+    , statefulness
+    , vector
+  default-language: Haskell2010

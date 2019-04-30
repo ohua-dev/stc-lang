@@ -28,7 +28,7 @@ library
                        , Data.StateElement
                        , Type.Magic
                        , Monad.Generator
-                       , Control.Monad.Par.Scheds.TraceDebuggable
+                       -- , Control.Monad.Par.Scheds.TraceDebuggable
                        , Control.Monad.Stream
                        , Control.Monad.Stream.Chan
                        , Control.Monad.Stream.Par

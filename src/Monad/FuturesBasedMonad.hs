@@ -35,8 +35,11 @@ import Control.Monad
 import Control.Arrow (first)
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.IO as PIO
-import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
+
+-- import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
 import Control.Monad.State as S
+
+import Control.Concurrent.Chan
 
 --
 -- for debugging only:
@@ -49,7 +52,6 @@ import Data.Maybe
 import Data.Set as Set hiding (map)
 import Data.StateElement
 import Data.Void
-import Control.Concurrent.Chan
 
 -- import           Debug.Trace
 import GHC.Generics (Generic)
@@ -262,7 +264,10 @@ getState = PC.get -- will wait for the value
 
 runOhuaM :: (NFData a) => OhuaM a -> [S] -> IO (a, [S])
 runOhuaM comp initialState =
-  TDB.runParIO $ do
+  runParIO $
+  -- for debugging the scheduler
+  -- TDB.runParIO $ do
+   do
     inState <- mapM PC.newFull initialState
     outState <- forM initialState $ const PC.new
     (result, _) <- runOhua comp $ GlobalState inState outState
@@ -416,34 +421,32 @@ case_ cond patternsAndBranches = OhuaM moveState comp
 --                return r02
 --
 -- runOhua m s
-
 data CollSt = CollSt
-    { states :: [S]
-    , signals :: [IO S]
-    }
+  { states :: [S]
+  , signals :: [IO S]
+  }
 
 instance Monoid CollSt where
-    mempty = CollSt [] []
-    CollSt st1 si1 `mappend` CollSt st2 si2 =
-        CollSt (st1 `mappend` st2) (si1 `mappend` si2)
+  mempty = CollSt [] []
+  CollSt st1 si1 `mappend` CollSt st2 si2 =
+    CollSt (st1 `mappend` st2) (si1 `mappend` si2)
 
 type STCLang a b = StateT CollSt IO (a -> OhuaM b)
 
 liftWithState ::
-       (Typeable s, NFData a, NFData s, Show a)
-    => IO s
-    -> (a -> StateT s IO b)
-    -> STCLang a b
+     (Typeable s, NFData a, NFData s, Show a)
+  => IO s
+  -> (a -> StateT s IO b)
+  -> STCLang a b
 liftWithState state stateThread = do
-    s0 <- lift state
-    l <- S.state $ \s -> (length $ states s, s { states = states s ++ [toS s0] })
-    pure $ liftWithIndex l stateThread
+  s0 <- lift state
+  l <- S.state $ \s -> (length $ states s, s {states = states s ++ [toS s0]})
+  pure $ liftWithIndex l stateThread
 
 runSTCLang :: (NFData a, NFData b) => STCLang a b -> a -> IO (b, [S])
 runSTCLang langComp a = do
-    (comp,gs) <- S.runStateT langComp mempty
-    runOhuaM (comp a) $ states gs
-
+  (comp, gs) <- S.runStateT langComp mempty
+  runOhuaM (comp a) $ states gs
 
 smapSTC ::
      forall a b. (NFData b, Show a)
@@ -452,47 +455,48 @@ smapSTC ::
 smapSTC comp = smap <$> comp
 
 type Signal = IO
+
 type Signals = (Int, S)
 
 instance Show S where
-    show _ = "S"
+  show _ = "S"
 
 liftSignal :: (Typeable a, NFData a) => Signal a -> IO a -> STCLang Signals a
 liftSignal s0 init = do
-    idx <-
-        S.state $ \s@CollSt {signals} ->
-            (length signals, s {signals = signals ++ [toS <$> s0]})
-    liftWithState init $ \(i, s) ->
-        if i == idx
-            then do
-                let my = fromS s
-                S.put my
-                pure my
-            else S.get
+  idx <-
+    S.state $ \s@CollSt {signals} ->
+      (length signals, s {signals = signals ++ [toS <$> s0]})
+  liftWithState init $ \(i, s) ->
+    if i == idx
+      then do
+        let my = fromS s
+        S.put my
+        pure my
+      else S.get
 
 runSignals :: NFData a => STCLang Signals a -> IO ([a], [S])
 runSignals comp = do
-    (comp', s) <- S.runStateT comp mempty
-    chan <- newChan
-    forM_ (zip [0..] $ signals s) $ \(idx, sig) ->
-        forever $ do
-            event <- sig
-            writeChan chan $ Just (idx, event)
-    let signalGen = chanToGenerator chan
-    runOhuaM (smapGen comp' signalGen) $ states s
+  (comp', s) <- S.runStateT comp mempty
+  chan <- newChan
+  forM_ (zip [0 ..] $ signals s) $ \(idx, sig) ->
+    forever $ do
+      event <- sig
+      writeChan chan $ Just (idx, event)
+  let signalGen = chanToGenerator chan
+  runOhuaM (smapGen comp' signalGen) $ states s
 
 -- | @filter init p f@ applies @f@ to only those values @a@ that satisfy the
 -- predicate @p@. For values not satisfying it returns the last computed value
 -- (initially @init@)
 filterSignal ::
-       (Show b, Typeable b, NFData b, NFData a)
-    => IO b -- Initial value for the output
-    -> (a -> OhuaM Bool) -- predicate
-    -> (a -> OhuaM b) -- computation to perform on `a`
-    -> STCLang a b
+     (Show b, Typeable b, NFData b, NFData a)
+  => IO b -- Initial value for the output
+  -> (a -> OhuaM Bool) -- predicate
+  -> (a -> OhuaM b) -- computation to perform on `a`
+  -> STCLang a b
 filterSignal init cond f = do
-    g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
-    return $ \item -> do
-        r <- cond item
-        i <- case_ r [(True, Just <$> f item), (False, pure Nothing)]
-        g i
+  g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
+  return $ \item -> do
+    r <- cond item
+    i <- case_ r [(True, Just <$> f item), (False, pure Nothing)]
+    g i
