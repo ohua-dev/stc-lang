@@ -1,26 +1,22 @@
-{-# LANGUAGE LambdaCase, ConstraintKinds, TupleSections,
-  TypeApplications, OverloadedStrings, PartialTypeSignatures,
-  FlexibleContexts, DeriveGeneric, TypeSynonymInstances #-}
+{-# LANGUAGE LambdaCase, ConstraintKinds, TupleSections, TypeApplications,
+  OverloadedStrings, PartialTypeSignatures, FlexibleContexts, DeriveGeneric,
+  TypeSynonymInstances, OverloadedLists, TypeFamilies #-}
 
-import qualified CampaignProcMap as CPM
 import Control.Concurrent (threadDelay)
 import Control.DeepSeq (NFData)
 import Control.Exception (assert, bracket)
-import Control.Monad ((<=<), (>=>), join, unless)
+import Control.Monad ((<=<), (>=>), join, unless, void, forever)
 import Control.Monad.IO.Class
 import Control.Monad.State.Class (MonadState, get, gets, modify, put)
 import Data.Aeson ((.:), decode)
 import qualified Data.Aeson as AE
 import Data.Aeson.Types (parseMaybe)
-import Data.Bifunctor
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as LBS
-import Data.ByteString.Lazy (ByteString)
-import qualified Data.HashTable.IO as MHT
 import Data.Hashable
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (isNothing, fromMaybe)
 import Data.Monoid ((<>))
 import Data.Text (Text)
 import qualified Data.Text as Tx
@@ -28,7 +24,6 @@ import qualified Data.Text.Encoding as Tx
 import Data.Time.Clock (getCurrentTime)
 import Data.Typeable (Typeable)
 import qualified Data.UUID.Types as UUID
-import Data.Void
 import qualified Data.Yaml as Yaml
 import GHC.Generics (Generic)
 import Lens.Micro
@@ -40,14 +35,15 @@ import Prelude hiding (String, show)
 import qualified Prelude as P
 import System.Random (randomIO)
 import System.Environment
+import qualified Debug.Trace as Debug
+import GHC.Exts (IsList, Item)
+import Data.String (IsString)
 
 import qualified Database.Redis as Redis
 
 import qualified Kafka.Consumer as K
 
 type String = BS.ByteString
-
-type DeserializeS = Void
 
 type Message = BS.ByteString
 
@@ -76,20 +72,28 @@ timeDivisor :: Long
 timeDivisor = 10000
 
 timeout :: Int
-timeout = 1000 * 000
+timeout = 1000 * 1000
 
 -- NOTE I guessed this number. I have not seen any timeout specification in the
 -- benchmark. This is in milliseconds.
 kafkaTimeout :: K.Timeout
-kafkaTimeout = K.Timeout 400
+kafkaTimeout = K.Timeout 400000
 
-readKafka :: _ -> IO Message
+-- NOTE The client also supports a `pollMessageBatch` function with returns
+-- multiple messages at once, so we might want to implement the runtime or
+-- algorithm to be able to make use of this if we are too slow
+readKafka :: K.KafkaConsumer -> IO Message
 readKafka con = do
+    putStrLn "Reading from kafka... "
+    subsState <- fromRight <$> K.subscription con
+    putStrLn $ "Subscription state: \n" <> P.show subsState
     record <- fromRight <$> K.pollMessage con kafkaTimeout
-    assert (K.crKey record == Nothing) (pure ()) -- I just put this in hear for now so that
-                                      -- we can reason better about the
-                                      -- structure of the kafka message
-    case K.crKey record of
+    assert (isNothing $ K.crKey record) (pure ()) -- I just put this in here for
+                                                 -- now so that we can reason
+                                                 -- better about the structure
+                                                 -- of the kafka message
+    putStrLn "done"
+    case K.crValue record of
         Nothing -> error "Empty response from Kafka"
         Just msg -> pure msg
 
@@ -108,7 +112,7 @@ writeRedis campaign window = do
             Nothing -> do
                 windowUUID <-
                     LBS.toStrict . UUID.toByteString <$> liftIO randomIO
-                Redis.hset
+                checkR_ $ Redis.hset
                     campaign
                     (Tx.encodeUtf8 $ timestamp window)
                     windowUUID
@@ -119,19 +123,25 @@ writeRedis campaign window = do
                             rand <-
                                 LBS.toStrict . UUID.toByteString <$>
                                 liftIO randomIO
-                            Redis.hset campaign "windows" rand
+                            checkR_ $ Redis.hset campaign "windows" rand
                             pure rand
                         Just uuid -> pure uuid
-                Redis.lpush windowListUUID [Tx.encodeUtf8 $ timestamp window]
+                checkR_ $ Redis.lpush windowListUUID [Tx.encodeUtf8 $ timestamp window]
                 pure windowUUID
             Just uuid -> pure uuid
-    Redis.hincrby windowUUID "seen_count" . fromIntegral =<<
+    checkR_ $ Redis.hincrby windowUUID "seen_count" . fromIntegral =<<
         liftIO (readIORef (seenCount window))
     liftIO $ writeIORef (seenCount window) 0
     time <- BS.pack . P.show <$> liftIO getCurrentTime
-    Redis.hset windowUUID "time_updated" time
+    checkR_ $ Redis.hset windowUUID "time_updated" time
     Redis.lpush "time_updated" [time]
   where
+    -- NOTE This function is not necessary. It "only" forces the errors from the
+    -- redis database. You can drop it and all its uses if you want to describe
+    -- the algorithm. The reason I have it is so we notice if something goes
+    -- wrong with the redis database.
+    checkR_ :: (Monad f, Show err) => f (Either err a) -> f ()
+    checkR_ = (either (error . P.show) (const $ pure ()) =<<)
     getUUID field =
         either (const Nothing) (join . getIndex 1) <$>
         Redis.hmget campaign [field]
@@ -196,26 +206,54 @@ getWindow timeBucket campaignId = do
                     pure window
                 Just window -> pure window
 
+-- | These are necessary because the Kafka client is an older version (0.8.2.1)
+-- and does not support the `ApiVersionRequest` that the C-client library we use
+-- under the hood sends in the beginning.
+extraKafkaProperties :: (IsList l, Item l ~ (s0, s1), IsString s1, IsString s0) => l
+extraKafkaProperties =
+        [ ("api.version.request", "false")
+        , ("broker.version.fallback", "0.8.2.1")
+        ]
+
 -- | Reads the config file at the specified path and creates the connection
 -- objects we need
 setup :: FilePath -> IO (K.KafkaConsumer, Redis.Connection)
 setup loc = do
     conf <- fromRight <$> Yaml.decodeFileEither @AE.Value loc
-    let kafkaOpts = conf ^?! key "kafka" :: AE.Value
-        sub = K.topics [K.TopicName $ kafkaOpts ^?! key "topic" . _String]
+    let topic = K.TopicName $ conf ^?! key "kafka.topic" . _String
+    let sub = K.topics [topic]
         props =
-            K.brokersList $
+            -- NOTE If I do not assign a group it fails immediately with
+            -- "unknown group".
+            K.groupId (K.ConsumerGroupId "ohua-stream-bench-group") <>
+            K.extraProps extraKafkaProperties <>
+            K.debugOptions [K.DebugAll] <>
+            K.brokersList (
             map
-                (K.BrokerAddress .
-                 (<> show (kafkaOpts ^?! key "port" . _Number)))
-                (kafkaOpts ^.. key "brokers" . values . _String)
+                (\host ->
+                     K.BrokerAddress $ host <> ":" <>
+                     show (conf ^?! key "kafka.port" . _Integer))
+                (conf ^.. key "kafka.brokers" . values . _String))
         rinfo =
             Redis.defaultConnectInfo
                 { Redis.connectHost =
-                      conf ^?! key "redis" . key "host" . _String . to Tx.unpack
+                      conf ^?! key "redis.host" . _String . to Tx.unpack
                 }
-    (,) <$> fmap fromRight (K.newConsumer props sub) <*>
+    print topic
+    print conf
+    print $ K.cpProps props
+    cons <- fmap fromRight (K.newConsumer props sub)
+    (cons,) <$>
         Redis.checkedConnect rinfo
+
+withInitial msg ac = do
+    putStrLn $ "Doing initial " <> msg <> "..."
+    r <- ac
+    putStrLn $ msg <> " done"
+    pure r
+
+traceM :: Monad m => P.String -> m ()
+traceM msg = Debug.trace msg $ pure ()
 
 -- NOTE in the original implementation of the algorithm `rebalance` is the first
 -- function called on the input stream. This distributes the messages
@@ -225,6 +263,7 @@ setup loc = do
 algo kafkaConsumer redisConn
     -- Allocate the basic functions --
  = do
+    traceM "Start allocations"
     let deserialize o =
             fromMaybe (error "Decoding error") $ do
                 result <- decode $ LBS.fromStrict o
@@ -238,6 +277,7 @@ algo kafkaConsumer redisConn
                     (o .: "ip_address" :: _ String)
     let evFilterFunc (_, _, _, _, t, _, _) = pure $ t == "view"
     let project (_, _, _, i3, _, i5, _) = pure (i3, i5)
+    traceM "Allocating redis"
     redisJoin <-
         liftWithState redisJoinStateInit $ \(adId, v2) ->
             fmap (, adId, v2) <$> do
@@ -253,6 +293,7 @@ algo kafkaConsumer redisConn
                         pure mcid
     -- The campaign processor wrapped in the logic to separate handling of the
     -- timing event, regular and filtered data.
+    traceM "Allocating campaign"
     processCampaign <-
         liftWithState ((,) <$> Set.new <*> NFMap.new) $ \case
             Right (Just (campaignId, _adId, eventTime)) -> do
@@ -275,12 +316,15 @@ algo kafkaConsumer redisConn
     -- The condition we will use later for the if
     evCheck <- isTheSame getCurrentTime
     -- Allocate signals
+    traceM "Allocating timer"
     timerSig <-
-        liftSignal (threadDelay timeout >> getCurrentTime) getCurrentTime
+        liftSignal (threadDelay timeout >> getCurrentTime) (withInitial "time" getCurrentTime )
     -- Not sure if this is a good idea but I initialize here by polling the
     -- first message. Perhaps we should use a `Maybe` instead, however its not
     -- particularly convenient yet in our model so I do this.
-    msgSig <- liftSignal (readKafka kafkaConsumer) (readKafka kafkaConsumer)
+    traceM "Allocating Kafka reader"
+    msgSig <- liftSignal (readKafka kafkaConsumer) (withInitial "read kafka" $ readKafka kafkaConsumer)
+    traceM "Allocating preprocessor"
     filteredProcessor
         -- NOTE keyBy partitions the operator state according to some key. If we
         -- have time we should implement that too
@@ -304,12 +348,17 @@ algo kafkaConsumer redisConn
                      join <$> filteredProcessor msg)
         processCampaign procInput
 
-main = do
+main, main0 :: IO ()
+main = main0
+
+
+main0 = do
     [confPath] <- getArgs
-    bracket
+    void $ bracket
         (setup confPath)
-        (\(kafkaConn, redisConn) -> do runSignals (algo kafkaConn redisConn))
-        (\(kafkaConn, redisConn) -> do
+        (\(kafkaConn, _redisConn) -> do
+             print "Closing resources"
              K.closeConsumer kafkaConn
              -- Redis.disconnect redisConn
         )
+        (\(kafkaConn, redisConn) -> putStrLn "Starting execution" >> runSignals (algo kafkaConn redisConn))

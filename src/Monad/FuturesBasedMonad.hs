@@ -36,6 +36,7 @@ import Control.Monad
 
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
+import qualified Control.Concurrent.Async as Async
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.IO as PIO
 import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
@@ -475,12 +476,15 @@ liftSignal s0 init = do
 
 runSignals :: NFData a => STCLang Signals a -> IO ([a], [S])
 runSignals comp = do
+    putStrLn "Running STCLang"
     (comp', s) <- S.runStateT comp mempty
     chan <- newChan
-    forM_ (zip [0..] $ signals s) $ \(idx, sig) ->
+    putStrLn "Starting signals... "
+    Async.forConcurrently_ (zip [0..] $ signals s) $ \(idx, sig) ->
         forever $ do
             event <- sig
             writeChan chan $ Just (idx, event)
+    putStrLn "done"
     let signalGen = chanToGenerator chan
     runOhuaM (smapGen comp' signalGen) $ states s
 
