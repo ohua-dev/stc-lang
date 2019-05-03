@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 2578344c319b18b9d6c83a71e6aaa854999e02fc65ae69c44f57f2edfba79a2a
+-- hash: f50f8e6125985a82e74d82ba719363417282c31d4bf3c8f512d8d13242ffd357
 
 name:           benchmarks
 version:        0.1.0.0
@@ -24,6 +24,7 @@ library
     , monad-par
     , process
     , statefulness
+    , statistics
     , vector
   default-language: Haskell2010
 
@@ -40,5 +41,6 @@ executable benchmarks
     , monad-par
     , process
     , statefulness
+    , statistics
     , vector
   default-language: Haskell2010

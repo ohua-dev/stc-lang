@@ -5,6 +5,7 @@ import Control.Monad
 import Criterion
 import Criterion.IO
 import Criterion.Types
+import Statistics.Types (estPoint)
 import Data.Aeson
 import qualified Data.ByteString.Lazy as B
 import qualified Data.HashMap as HM
@@ -19,20 +20,28 @@ toScriptFormat :: [String] -> [(Word, [Report])] -> Value
 toScriptFormat variants = toJSON . concatMap (mapRun variants)
   where
     mapRun variants (cores, reps) =
-      map
-        (\(exp, rep) ->
-           object
-             [ "config" .=
-               object ["experiment" .= (exp :: String), "cores" .= cores]
-             , "data" .=
-               toJSON
-                 (fmap
-                    (\m ->
+        map
+            (\(exp, rep) ->
+                 object
+                     [ "config" .=
                        object
-                         ["start" .= (0.0 :: Float), "finish" .= measTime m]) $
-                  reportMeasured rep)
-             ]) $
-      zip variants reps
+                           ["experiment" .= (exp :: String), "cores" .= cores]
+                     , "data" .=
+                       toJSON
+                           (reverse $
+                            snd $
+                            foldl
+                                (\(old, acc) m ->
+                                     ( measTime m
+                                     , object
+                                           [ "start" .= old
+                                           , "finish" .= measTime m
+                                           ] :
+                                       acc))
+                                (0.0, [])
+                                (reportMeasured rep))
+                     ]) $
+        zip variants reps
 
 reportFileName = "results/reports.json"
 
@@ -52,9 +61,7 @@ runExperiment lo hi benchmark variants = do
         ]
       (_, _, recs) <- either error pure =<< readJSONReports reportFileName
       pure (c, recs)
-  let avg r =
-        let ms = reportMeasured r
-         in sum (measTime <$> ms) / fromIntegral (V.length ms)
+  let avg = estPoint . anMean . reportAnalysis
       outliers = ovEffect . anOutlierVar . reportAnalysis
   writeFile ("results/" ++ fname ++ ".csv") $
     unlines $

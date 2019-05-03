@@ -5,6 +5,7 @@ dependencies:
   - monad-par
   - statefulness
   - criterion
+  - statistics
   - aeson
   - bytestring
   - process
