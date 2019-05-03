@@ -11,9 +11,13 @@ dependencies:
   - process
   - vector
   - hashmap
+  - deepseq
+  - mtl
+  - time
+  - monad-par-extras
 library:
   source-dirs: src # This folder is for shared modules
 
 executables:
   benchmarks:
-    main: src/fbm_parallelism_runner.hs
+    main: src/bench_runner.hs
