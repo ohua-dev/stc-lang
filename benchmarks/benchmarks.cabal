@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 004cfa80d09e56565e72df915b73a46c8fee6fbdf9047d1dad9d22bc124650f7
+-- hash: 1df746505bec3223cf7fd6269380351843a668afb121420715ba9e659141eda1
 
 name:           benchmarks
 version:        0.1.0.0
@@ -13,6 +13,7 @@ build-type:     Simple
 library
   exposed-modules:
       BasicBench
+      BlackScholes
       MatMult
   other-modules:
       Paths_benchmarks
@@ -20,6 +21,7 @@ library
       src
   build-depends:
       aeson
+    , array
     , base >=4.7 && <5
     , bytestring
     , criterion
@@ -28,6 +30,7 @@ library
     , monad-par
     , monad-par-extras
     , mtl
+    , parallel
     , process
     , statefulness
     , statistics
@@ -41,6 +44,7 @@ executable benchmarks
       Paths_benchmarks
   build-depends:
       aeson
+    , array
     , base >=4.7 && <5
     , bytestring
     , criterion
@@ -49,6 +53,7 @@ executable benchmarks
     , monad-par
     , monad-par-extras
     , mtl
+    , parallel
     , process
     , statefulness
     , statistics
