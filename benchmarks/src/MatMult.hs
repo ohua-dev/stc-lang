@@ -214,11 +214,6 @@ matmultBench =
     opt = 0
     chunk = 1
 
--- main = defaultMainWith
---   defaultConfig
---   [matmultBench]
-
-
 m1 size = replicate size [1..size]
 m2 size = listToListList size [1..size*size]
 mA size = if size <= 4000 then m1 size else listToListList size (concat (take 20 (repeat [1..(size*size `div` 20)])))

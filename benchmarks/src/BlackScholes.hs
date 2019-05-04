@@ -1,7 +1,8 @@
 {-# LANGUAGE RecordWildCards, CPP, ScopedTypeVariables,
   FlexibleInstances, BangPatterns #-}
 
-module BlackScholes where
+module BlackScholes(bsBench) where
+
 {-Code taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/blackscholes/blackscholes.hs -}
 
 -- Ported from CnC/C++ program by Ryan Newton
@@ -57,6 +58,10 @@ import Data.List
 import qualified Data.Array.Unboxed as U
 import System.Environment
 
+
+import Monad.FuturesBasedMonad
+import Criterion
+import Criterion.Main
 --------------------------------------------------------------------------------
 
 type FpType = Float
@@ -171,3 +176,15 @@ main = do args <- getArgs
 	      sum = foldl1' (+) $ map (U.! 0) results
 
 	  putStrLn$ "Final checksum: "++ show sum
+
+bsBench =
+  bgroup
+    "bs-bench"
+    [ bench "sequential" (nf (map (computeSegment granularity)) [0, granularity .. numOptions-1])
+    , bench "ohua" (nfIO $ runOhuaM (smap (pure . (computeSegment granularity)) [0, granularity .. numOptions-1]) [])
+    , bench "par" (nf (runPar . (C.parMap (computeSegment granularity))) [0, granularity .. numOptions-1])
+    ]
+  where
+    numOptions = 1000
+    granularity = 100
+    numChunks = numOptions `quot` granularity

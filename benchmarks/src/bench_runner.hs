@@ -90,6 +90,7 @@ experiments =
   , ("app-bench", ["sequential", "ohua", "par"])
   , ("cond-bench", ["sequential", "ohua", "par"])
   , ("matmult-bench", ["sequential", "ohua", "par"])
+  , ("bs-bench", ["sequential", "ohua", "par"])
   ]
 
 runAllExperiments lo hi = do
