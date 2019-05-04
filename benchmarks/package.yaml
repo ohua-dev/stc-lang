@@ -15,8 +15,13 @@ dependencies:
   - mtl
   - time
   - monad-par-extras
+<<<<<<< HEAD
   - parallel
   - array
+=======
+  - array
+  - parallel
+>>>>>>> b0056db92cc0368b39ff52e3c634b97313ee352d
 library:
   source-dirs: src # This folder is for shared modules
 

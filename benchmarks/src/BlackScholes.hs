@@ -1,4 +1,5 @@
-{-# LANGUAGE RecordWildCards, CPP, ScopedTypeVariables, FlexibleInstances  #-}
+{-# LANGUAGE RecordWildCards, CPP, ScopedTypeVariables,
+  FlexibleInstances, BangPatterns #-}
 
 module BlackScholes where
 {-Code taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/blackscholes/blackscholes.hs -}
@@ -136,7 +137,10 @@ computeSegment granularity t = arr
 --------------------------------------------------------------------------------
 
 -- No need to go deeper here because its unboxed, right?
+--
+-- Justus: I'd hope so
 instance NFData (U.UArray Int FpType) where
+    rnf !x = ()
 
 main = do args <- getArgs
           -- How many [stock] options shall we run through the algorithm, and in
