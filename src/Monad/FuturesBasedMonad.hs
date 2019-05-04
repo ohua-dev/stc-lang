@@ -523,32 +523,64 @@ data InclusiveRange =
 -- >        (\x y -> return (x+y))
 -- >        0
 --
+-- parMapReduceRangeThresh ::
+--      (NFData a, ParFuture iv p)
+--   => Int -- ^ threshold
+--   -> InclusiveRange -- ^ range over which to calculate
+--   -> (Int -> p a) -- ^ compute one result
+--   -> (a -> a -> p a) -- ^ combine two results (associative)
+--   -> a -- ^ initial result
+--   -> p a
+-- parMapReduceRangeThresh threshold range fn binop init =
+-- loop min max
+-- where
+--   loop min max
+--     | max - min <= threshold =
+--       let mapred a b = do
+--             x <- fn b
+--             result <- a `binop` x
+--             return result
+--        in foldM mapred init [min .. max]
+--     | otherwise = do
+--       let mid = min + ((max - min) `quot` 2)
+--       rght <- spawn $ loop (mid + 1) max
+--       l <- loop min mid
+--       r <- get rght
+--       l `binop` r
+instance Show InclusiveRange
+
 parMapReduceRangeThresh ::
-     (NFData a, ParFuture iv p)
+     (NFData a, Typeable a, Show a)
   => Int -- ^ threshold
   -> InclusiveRange -- ^ range over which to calculate
-  -> (Int -> p a) -- ^ compute one result
-  -> (a -> a -> p a) -- ^ combine two results (associative)
+  -> (Int -> a) -- ^ compute one result
+  -> (a -> a -> a) -- ^ combine two results (associative)
   -> a -- ^ initial result
-  -- -> p a
-  -> p a
-parMapReduceRangeThresh threshold (InclusiveRange min max) fn binop init = do
-  let (, [reduceState]]) = runOhuaM mapReduce
-  in reduceState
+  -> IO a
+parMapReduceRangeThresh threshold range fn binop init
+  -- sadly I could not use STCLang to build this :(
+  -- reason: it must be STCLang a b to implement liftSignal instead of just
+  -- STCLang b just like OhuaM b
+ = do
+  (_, [reduceState]) <- runOhuaM mapReduce [toS init]
+  return $ fromS reduceState
   where
-    mapReduce = smapGen_ (mapAndCombine >=> reduce) chunkGenerator
-  -- loop min max
-  -- where
-  --   loop min max
-  --     | max - min <= threshold =
-  --       let mapred a b = do
-  --             x <- fn b
-  --             result <- a `binop` x
-  --             return result
-  --        in foldM mapred init [min .. max]
-  --     | otherwise = do
-  --       let mid = min + ((max - min) `quot` 2)
-  --       rght <- spawn $ loop (mid + 1) max
-  --       l <- loop min mid
-  --       r <- get rght
-  --       l `binop` r
+    mapReduce = do
+      smapGen
+        ((pure . mapAndCombine) >=> (liftWithIndex 0 reduce))
+        chunkGenerator
+    chunkGenerator =
+      flip stateToGenerator range $ do
+        (InclusiveRange mi ma) <- S.get
+        if mi >= ma
+          then return Nothing
+          else let mi' = min (mi + threshold) ma
+                in do S.put $ InclusiveRange (mi' + 1) ma
+                      return $ Just $ InclusiveRange mi mi'
+    mapAndCombine (InclusiveRange mi ma) =
+      let mapred a b =
+            let x = fn b
+                result = a `binop` x
+             in result
+       in List.foldl mapred init [mi .. ma]
+    reduce v = S.get >>= (S.put . (`binop` v))
