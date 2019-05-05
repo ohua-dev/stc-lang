@@ -27,6 +27,7 @@ module Monad.FuturesBasedMonad
   , liftSignal
   , runSignals
   , filterSignal
+  , parMapReduceRangeThresh
   ) where
 
 import Control.Monad
@@ -34,6 +35,7 @@ import Control.Monad
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
 import Control.Monad.Par.Class as PC
+import Control.Monad.Par.Combinator (InclusiveRange, InclusiveRange(..))
 import Control.Monad.Par.IO as PIO
 
 -- import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
@@ -504,10 +506,6 @@ filterSignal init cond f = do
 ----
 -- The below comes originally from: https://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/src/Control-Monad-Par-Combinator.html#parMapReduceRangeThresh
 ----
-data InclusiveRange =
-  InclusiveRange Int
-                 Int
-
 -- | Computes a binary map\/reduce over a finite range.  The range is
 -- recursively split into two, the result for each half is computed in
 -- parallel, and then the two results are combined.  When the range

@@ -1,5 +1,6 @@
 import BasicBench
 import BlackScholes
+import Mandelbrot
 import MatMult
 
 import Criterion
@@ -14,4 +15,5 @@ main =
     , condBenchmark
     , matmultBench
     , bsBench
+    , mandelBench
     ]

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 1df746505bec3223cf7fd6269380351843a668afb121420715ba9e659141eda1
+-- hash: e5c22aa9e4d0496f297548302d165a7f9dde99e9845b274f31da2990d488aab4
 
 name:           benchmarks
 version:        0.1.0.0
@@ -14,6 +14,7 @@ library
   exposed-modules:
       BasicBench
       BlackScholes
+      Mandelbrot
       MatMult
   other-modules:
       Paths_benchmarks
