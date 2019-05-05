@@ -28,6 +28,7 @@ module Monad.FuturesBasedMonad
   , runSignals
   , filterSignal
   , parMapReduceRangeThresh
+  , mapReduce
   ) where
 
 import Control.Monad
@@ -582,3 +583,19 @@ parMapReduceRangeThresh threshold range fn binop init
              in result
        in List.foldl mapred init [mi .. ma]
     reduce v = S.get >>= (S.put . (`binop` v))
+
+-- streams output from the map phase to the reduce phase
+mapReduce ::
+     (NFData a, NFData b, Typeable b, Show a, Show b)
+  => (a -> b)
+  -> (b -> b -> b)
+  -> b
+  -> [a]
+  -> IO b
+mapReduce mapper reducer init xs = do
+  (_, [reduceState]) <- runOhuaM algo [toS init]
+  return $ fromS reduceState
+  where
+    algo = do
+      smapGen ((pure . mapper) >=> (liftWithIndex 0 reduce)) $ listGenerator xs
+    reduce v = S.get >>= (S.put . (`reducer` v))

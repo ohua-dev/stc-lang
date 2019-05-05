@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: e5c22aa9e4d0496f297548302d165a7f9dde99e9845b274f31da2990d488aab4
+-- hash: 67566bf40ab9f3aff144605535d57a659a99b4c5d96bc006befa3e65c2a21a59
 
 name:           benchmarks
 version:        0.1.0.0
@@ -16,6 +16,7 @@ library
       BlackScholes
       Mandelbrot
       MatMult
+      SumEuler
   other-modules:
       Paths_benchmarks
   hs-source-dirs:

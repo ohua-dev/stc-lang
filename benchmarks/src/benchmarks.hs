@@ -2,6 +2,7 @@ import BasicBench
 import BlackScholes
 import Mandelbrot
 import MatMult
+import SumEuler
 
 import Criterion
 import Criterion.Main
@@ -16,4 +17,5 @@ main =
     , matmultBench
     , bsBench
     , mandelBench
+    , sumEulerBench
     ]
