@@ -255,10 +255,15 @@ mandelBench =
     , bench "par" (nf (runPar . (simple x y depth)) C.parMapReduceRangeThresh)
     ]
   where
-    x = 3
-    y = 3
-    depth = 3
-
+    {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
+    -- desktop values
+    -- x = 1024
+    -- y = 1024
+    -- depth = 256
+    -- server values
+    x = 1024
+    y = 1024
+    depth = 256
 {-
 [2012.03.08] {Updated to use Vector}
 Looks like this was out of date in that it was still using AList.

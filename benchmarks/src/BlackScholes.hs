@@ -185,6 +185,11 @@ bsBench =
     , bench "par" (nf (runPar . (C.parMap (computeSegment granularity))) [0, granularity .. numOptions-1])
     ]
   where
-    numOptions = 1000
-    granularity = 100
     numChunks = numOptions `quot` granularity
+    {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
+    -- Desktop values
+    -- numOptions = 15000000
+    -- granularity = 10000
+    -- Server values
+    numOptions = 30000000
+    granularity = 10000
