@@ -68,9 +68,9 @@ sumEulerBench =
     ]
     {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
     -- desktop values
+    -- c = 100
+    -- n = 8000
+    -- server values
   where
     c = 100
-    n = 8000
-    -- server values
-    -- c = 100
-    -- n = 16000
+    n = 16000
