@@ -48,6 +48,8 @@ runExperiment lo hi benchmark variants = do
         "./bin/benchmarks"
         [ "--json"
         , reportFileName
+        , "--iters"
+        , "11"
         , "--match"
         , "prefix"
         , benchmark
@@ -58,13 +60,13 @@ runExperiment lo hi benchmark variants = do
       pure (c, recs)
   let avg = estPoint . anMean . reportAnalysis
       outliers = ovEffect . anOutlierVar . reportAnalysis
-  writeFile ("results/" ++ fname ++ ".csv") $
-    unlines $
-    map
-      (\(c, recs) ->
-         intercalate "," $
-         show c : map (show . avg) recs ++ map (show . outliers) recs)
-      recs
+  -- writeFile ("results/" ++ fname ++ ".csv") $
+  --   unlines $
+  --   map
+  --     (\(c, recs) ->
+  --        intercalate "," $
+  --        show c : map (show . avg) recs ++ map (show . outliers) recs)
+  --     recs
   B.writeFile ("results/" ++ fname ++ ".json") $
     encode $ toScriptFormat variants recs
 
