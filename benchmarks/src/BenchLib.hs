@@ -65,10 +65,9 @@ startStopWatch = StopWatch <$> stopWatchStdClock
 measureStopWatch :: StopWatch -> IO Word64
 measureStopWatch (StopWatch begin) = do
     time <- stopWatchStdClock
-    let diff = diffTimeSpec begin time
+    let diff = diffTimeSpec time begin
         nanosecs = toNanoSecs diff
-        microsecs = nanosecs -- `div` (1000 * 1000)
-    pure $ fromIntegral  microsecs
+    pure $ fromIntegral nanosecs
 
 runBench :: Benchmarkable -> Iterations -> IO [Record]
 runBench bm iters =
