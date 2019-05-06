@@ -25,16 +25,22 @@ toScriptFormat variants = toJSON . concatMap (mapRun variants)
            object
              [ "config" .=
                object ["experiment" .= (exp :: String), "cores" .= cores]
-             , "data" .=
-               toJSON
-                 (reverse $
-                  snd $
-                  foldl
-                    (\(old, acc) m ->
-                       ( measTime m
-                       , object ["start" .= old, "finish" .= measTime m] : acc))
-                    (0.0, [])
-                    (reportMeasured rep))
+             -- , "data" .=
+               -- toJSON
+                 -- (reverse $
+                 --  snd $
+                 --  foldl
+                 --    (\(old, acc) m ->
+                 --       ( measTime m
+                 --       , object
+                 --           [ "start" .= old
+                 --           , "finish" .= measTime m
+                 --           , "iters" .= measIters m
+                 --           ] :
+                 --         acc))
+                 --    (0.0, [])
+                 --    (reportMeasured rep))
+             , "mean" .= (estPoint $ anMean $ reportAnalysis rep)
              ]) $
       zip variants reps
 
@@ -49,7 +55,7 @@ runExperiment lo hi benchmark variants = do
         [ "--json"
         , reportFileName
         , "--iters"
-        , "11"
+        , "25"
         , "--match"
         , "prefix"
         , benchmark
@@ -94,7 +100,7 @@ experiments =
   , ("matmult-bench", ["sequential", "ohua", "par"])
   , ("bs-bench", ["sequential", "ohua", "par"])
   , ("mandel-bench", ["sequential", "ohua", "par"])
-  , ("sumeuler-bench", ["sequential", "ohua", "par"])
+  -- , ("sumeuler-bench", ["sequential", "ohua", "par"])
   ]
 
 runAllExperiments lo hi = do
