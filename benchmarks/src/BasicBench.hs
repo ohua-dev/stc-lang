@@ -12,7 +12,11 @@ import Control.Concurrent
 import Control.DeepSeq
 import Control.Monad ((>=>))
 import Control.Monad.State.Lazy (get, put)
-import BenchLib
+import Criterion
+import Criterion.IO
+import Criterion.Internal
+import Criterion.Main
+import Criterion.Types (Verbosity(Quiet), verbosity)
 import Data.StateElement
 import Data.Time.Clock.POSIX
 import Data.Word

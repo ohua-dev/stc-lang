@@ -60,7 +60,8 @@ import System.Environment
 
 
 import Monad.FuturesBasedMonad
-import BenchLib
+import Criterion
+import Criterion.Main
 --------------------------------------------------------------------------------
 
 type FpType = Float

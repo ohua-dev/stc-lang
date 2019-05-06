@@ -1,0 +1,64 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.1.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 67566bf40ab9f3aff144605535d57a659a99b4c5d96bc006befa3e65c2a21a59
+
+name:           benchmarks
+version:        0.1.0.0
+build-type:     Simple
+
+library
+  exposed-modules:
+      BasicBench
+      BlackScholes
+      Mandelbrot
+      MatMult
+      SumEuler
+  other-modules:
+      Paths_benchmarks
+  hs-source-dirs:
+      src
+  build-depends:
+      aeson
+    , array
+    , base >=4.7 && <5
+    , bytestring
+    , criterion
+    , deepseq
+    , hashmap
+    , monad-par
+    , monad-par-extras
+    , mtl
+    , parallel
+    , process
+    , statefulness
+    , statistics
+    , time
+    , vector
+  default-language: Haskell2010
+
+executable benchmarks
+  main-is: src/bench_runner.hs
+  other-modules:
+      Paths_benchmarks
+  build-depends:
+      aeson
+    , array
+    , base >=4.7 && <5
+    , bytestring
+    , criterion
+    , deepseq
+    , hashmap
+    , monad-par
+    , monad-par-extras
+    , mtl
+    , parallel
+    , process
+    , statefulness
+    , statistics
+    , time
+    , vector
+  default-language: Haskell2010

@@ -12,4 +12,3 @@ cabal.config
 *.eventlog
 */*.csv
 */*.json
-/benchmarks/benchmarks.cabal
