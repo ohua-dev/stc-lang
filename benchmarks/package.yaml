@@ -4,8 +4,6 @@ dependencies:
   - base >= 4.7 && < 5
   - monad-par
   - statefulness
-  - criterion
-  - statistics
   - aeson
   - bytestring
   - process
@@ -17,9 +15,22 @@ dependencies:
   - monad-par-extras
   - parallel
   - array
+  - binary
+  - optparse-applicative
+  - directory
+  - clock
 library:
   source-dirs: src # This folder is for shared modules
 
 executables:
+  bench-exec:
+    dependencies:
+      - benchmarks
+    main: src/benchmarks.hs
+    ghc-options:
+      - -rtsopts
+      - -threaded
   benchmarks:
     main: src/bench_runner.hs
+    dependencies:
+      - benchmarks

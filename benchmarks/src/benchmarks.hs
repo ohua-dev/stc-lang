@@ -3,13 +3,10 @@ import BlackScholes
 import Mandelbrot
 import MatMult
 import SumEuler
+import BenchLib
 
-import Criterion
-import Criterion.Main
 
-main =
-  defaultMainWith
-    defaultConfig
+main = makeMain
     [ ohuaBenchmark
     , compBenchmark
     , appBenchmark

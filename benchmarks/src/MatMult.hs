@@ -35,8 +35,7 @@ import Control.Monad.Par
 #endif
 
 import Monad.FuturesBasedMonad
-import Criterion
-import Criterion.Main
+import BenchLib
 -------------------------------------
 
 type Vector = [Int]
@@ -212,13 +211,13 @@ matmultBench =
   where
     {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
     -- desktop values
-    -- size = 768
-    -- opt = 0
-    -- chunk = 64
-    -- server values
-    size = 1024
+    size = 768
     opt = 0
     chunk = 64
+    -- server values
+    -- size = 1024
+    -- opt = 0
+    -- chunk = 64
 
 m1 size = replicate size [1..size]
 m2 size = listToListList size [1..size*size]

@@ -7,8 +7,7 @@ import Control.Monad.Par
 {-Code taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/sumeuler/sumeuler.hs -}
 import qualified Control.Monad.Par.Combinator as C
 
-import Criterion
-import Criterion.Main
+import BenchLib
 import Monad.FuturesBasedMonad as Ohua
 
 sumEuler_ohua :: Int -> Int -> IO Int

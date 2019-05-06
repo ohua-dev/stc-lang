@@ -39,9 +39,8 @@ parMapReduceRangeThresh = C.parMapReduceThresh
 import Control.Monad.Par.Combinator as C
 #endif
 
+import BenchLib
 import Monad.FuturesBasedMonad as Ohua
-import Criterion
-import Criterion.Main
 import Control.Monad.Identity (runIdentity)
 
 mandel :: Int -> Complex Double -> Int
