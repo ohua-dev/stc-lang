@@ -17,5 +17,5 @@ main =
     , matmultBench
     , bsBench
     , mandelBench
-    -- , sumEulerBench
+    , sumEulerBench
     ]

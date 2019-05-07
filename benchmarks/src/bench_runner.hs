@@ -100,7 +100,7 @@ experiments =
   , ("matmult-bench", ["sequential", "ohua", "par"])
   , ("bs-bench", ["sequential", "ohua", "par"])
   , ("mandel-bench", ["sequential", "ohua", "par"])
-  -- , ("sumeuler-bench", ["sequential", "ohua", "par"])
+  , ("sumeuler-bench", ["sequential", "ohua", "par"])
   ]
 
 runAllExperiments lo hi = do
