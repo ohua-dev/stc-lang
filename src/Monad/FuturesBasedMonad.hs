@@ -56,6 +56,8 @@ import Data.Set as Set hiding (map)
 import Data.StateElement
 import Data.Void
 
+import Control.DeepSeq (deepseq)
+
 -- import           Debug.Trace
 import GHC.Generics (Generic)
 
@@ -192,10 +194,12 @@ instance Applicative OhuaM where
   --  -- this collecting is only stopped by the monadic bind operator!
 
 instance Monad OhuaM where
-  {-# NOINLINE return #-}
+  --{-# NOINLINE return #-}
   return :: forall a. a -> OhuaM a
   return v = OhuaM return $ \s -> return (v, s)
-  {-# NOINLINE (>>=) #-}
+  {-# INLINE return #-}
+  --{-# NOINLINE (>>=) #-}
+  {-# INLINE (>>=) #-}
   (>>=) :: forall a b. OhuaM a -> (a -> OhuaM b) -> OhuaM b
   f >>= g = OhuaM moveState comp
     where
@@ -208,6 +212,7 @@ instance Monad OhuaM where
         flip moveStateForward gs' $
           g $
           error "Invariant broken: Don't touch me, state forward moving code!"
+      {-# INLINE moveState #-}
       comp ::
            forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
         => GlobalState ivar
@@ -220,16 +225,46 @@ instance Monad OhuaM where
         (result0, gs') <- runOhua f gs
         (result1, gs'') <- runOhua (g result0) gs'
         return (result1, gs'')
+      {-# INLINE comp #-}
 
 instance MonadIO OhuaM where
   liftIO :: IO a -> OhuaM a
   liftIO ioAction = OhuaM return $ \s -> (, s) <$> liftIO ioAction
+  {-# INLINE liftIO #-}
 
-{-# NOINLINE liftWithIndex #-}
+--{-# NOINLINE liftWithIndex #-}
+{-# INLINE liftWithIndex #-}
 liftWithIndex ::
-     (Show a, NFData s, Typeable s) => Int -> SF s a b -> a -> OhuaM b
-liftWithIndex i f d = liftWithIndex' i $ f d
+     (NFData a, Show a, NFData s, Typeable s) => Int -> SF s a b -> a -> OhuaM b
+liftWithIndex = liftWithIndexS
 
+--liftWithIndex i f d = liftWithIndex' i $ f d
+
+liftWithIndexS :: forall a s b.
+     (Show a, NFData s, Typeable s, NFData a) => Int -> SF s a b -> a -> OhuaM b
+liftWithIndexS i f d =
+  OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState $ f d)
+  where
+    compAndMoveState ::
+         forall ivar m a. (ParIVar ivar m, MonadIO m)
+      => SFM s a
+      -> GlobalState ivar
+      -> m (a, GlobalState ivar)
+    compAndMoveState sf (GlobalState gsIn gsOut)
+      -- we define the proper order on the private state right here!
+     = do
+      let ithIn = gsIn !! i
+          ithOut = gsOut !! i
+      d `deepseq` pure ()
+      localState <- getState ithIn -- this synchronizes access to the local state
+      (d', localState') <- liftIO $ runSF sf $ fromS localState
+      release ithOut $ toS localState'
+      return (d', GlobalState gsIn gsOut)
+    idSf :: SFM s ()
+    idSf = return ()
+    {-# INLINE idSf #-}
+
+{-# INLINE liftWithIndex' #-}
 liftWithIndex' ::
      forall s b. (NFData s, Typeable s)
   => Int
@@ -254,10 +289,14 @@ liftWithIndex' i comp =
       return (d', GlobalState gsIn gsOut)
     idSf :: SFM s ()
     idSf = return ()
+    {-# INLINE idSf #-}
 
-{-# NOINLINE release #-}
+--{-# NOINLINE release #-}
 release :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 release = updateState
+{-# INLINE release #-}
+{-# INLINE updateState #-}
+{-# INLINE getState #-}
 
 updateState :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 updateState = PC.put
@@ -281,7 +320,8 @@ runOhuaM comp initialState =
 -- state dependencies!
 -- version used for debugging:
 -- smap :: (NFData b, NFData s, Show a, ParIVar ivar m, NFData (ivar s)) => (Int -> a -> OhuaM m (GlobalState ivar s) b) -> [a] -> OhuaM m (GlobalState ivar s) [b]
-{-# NOINLINE smap #-}
+--{-# NOINLINE smap #-}
+--{-# INLINE smap #-}
 smap ::
      forall a b. (NFData b, Show a)
   => (a -> OhuaM b)
@@ -561,28 +601,36 @@ parMapReduceRangeThresh threshold range fn binop init
   -- reason: it must be STCLang a b to implement liftSignal instead of just
   -- STCLang b just like OhuaM b
  = do
-  (_, [reduceState]) <- runOhuaM mapReduce [toS init]
-  return $ fromS reduceState
+    (_, [reduceState]) <- runOhuaM mapReduce [toS init]
+    return $ fromS reduceState
   where
     mapReduce = do
-      smapGen
-        ((pure . mapAndCombine) >=> (liftWithIndex 0 reduce))
-        chunkGenerator
+        smapGen
+            ((pure . mapAndCombine) >=>
+             liftWithIndexS 0 reduce)
+            chunkGenerator
+    chunkGenerator :: Generator IO InclusiveRange
     chunkGenerator =
-      flip stateToGenerator range $ do
-        (InclusiveRange mi ma) <- S.get
-        if mi >= ma
-          then return Nothing
-          else let mi' = min (mi + threshold) ma
-                in do S.put $ InclusiveRange (mi' + 1) ma
-                      return $ Just $ InclusiveRange mi mi'
+        flip stateToGenerator range $ do
+            (InclusiveRange mi ma) <- S.get
+            if mi >= ma
+                then return Nothing
+                else let mi' = min (mi + threshold) ma
+                      in do S.put $ InclusiveRange (mi' + 1) ma
+                            return $ Just $ InclusiveRange mi mi'
+    list (InclusiveRange mi ma)
+        | mi >= ma = []
+        | otherwise = InclusiveRange mi mi' : list (InclusiveRange (mi' + 1) ma)
+      where
+        mi' = min (mi + threshold) ma
     mapAndCombine (InclusiveRange mi ma) =
-      let mapred a b =
-            let x = fn b
-                result = a `binop` x
-             in result
-       in List.foldl mapred init [mi .. ma]
+        let mapred a b =
+                let x = fn b
+                    result = a `binop` x
+                 in result
+         in List.foldl mapred init [mi .. ma]
     reduce v = S.get >>= (S.put . (`binop` v))
+--{-# INLINE parMapReduceRangeThresh #-}
 
 -- streams output from the map phase to the reduce phase
 mapReduce ::
@@ -593,9 +641,10 @@ mapReduce ::
   -> [a]
   -> IO b
 mapReduce mapper reducer init xs = do
-  (_, [reduceState]) <- runOhuaM algo [toS init]
-  return $ fromS reduceState
+    (_, [reduceState]) <- runOhuaM algo [toS init]
+    return $ fromS reduceState
   where
-    algo = do
-      smapGen ((pure . mapper) >=> (liftWithIndex 0 reduce)) $ listGenerator xs
+    algo =
+        smapGen (pure . mapper >=> liftWithIndexS 0 reduce) $ listGenerator xs
     reduce v = S.get >>= (S.put . (`reducer` v))
+--{-# INLINE mapReduce #-}
