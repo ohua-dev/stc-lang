@@ -10,21 +10,21 @@ import qualified Data.ByteString.Lazy as B
 import qualified Data.HashMap as HM
 import Data.List
 import qualified Data.Vector as V
-import Statistics.Types (estPoint, estError, confIntLDX, confIntUDX)
+import Statistics.Types (confIntLDX, confIntUDX, estError, estPoint)
 import System.Environment
 import System.Exit
 import System.IO
 import System.Process as P
 
-toScriptFormat :: [String] -> [(Word, [Report])] -> Value
-toScriptFormat variants = toJSON . concatMap (mapRun variants)
+toScriptFormat :: [(Word, [Report])] -> Value
+toScriptFormat = toJSON . concatMap mapRun
   where
-    mapRun variants (cores, reps) =
+    mapRun (cores, reps) =
       map
-        (\(exp, rep) ->
+        (\rep ->
            object
              [ "config" .=
-               object ["experiment" .= (exp :: String), "cores" .= cores]
+               object ["experiment" .= reportName rep, "cores" .= cores]
              -- , "data" .=
                -- toJSON
                  -- (reverse $
@@ -40,40 +40,40 @@ toScriptFormat variants = toJSON . concatMap (mapRun variants)
                  --         acc))
                  --    (0.0, [])
                  --    (reportMeasured rep))
-             , "mean" .= let meanEstimate = anMean $ reportAnalysis rep in
-               object [ "value" .= estPoint meanEstimate
-                      , "upper" .= confIntLDX ( estError meanEstimate )
-                      , "lower" .= confIntUDX ( estError meanEstimate )
-                      ]
-             ]) $
-      zip variants reps
+             , "mean" .=
+               let meanEstimate = anMean $ reportAnalysis rep
+                in object
+                     [ "value" .= estPoint meanEstimate
+                     , "upper" .= confIntLDX (estError meanEstimate)
+                     , "lower" .= confIntUDX (estError meanEstimate)
+                     ]
+             ])
+        reps
 
 reportFileName = "results/reports.json"
 
 runExperiment lo hi benchmark variants = do
-    let fname = benchmark ++ "-" ++ show lo ++ ":" ++ show hi ++ "-results"
-        runFor c name = do
-            callProcess
-                "./bin/benchmarks"
-                [ "--json"
-                , reportFileName
-                  -- , "--iters"
-                  -- , "25"
-                , "--match"
-                , "prefix"
-                , benchmark ++ "/" ++ name
-                , "+RTS"
-                , "-N" ++ show (c :: Word)
-                ]
-            (_, _, recs) <- either error pure =<< readJSONReports reportFileName
-            pure recs
-    let multiVars = filter (/= "sequential") variants
-    sequential <- runFor 1 "sequential"
-    multiRecs <-
-        forM [lo .. hi] $ \c -> do
-            recs <- concat <$> mapM (runFor c) multiVars
-            pure (c, recs)
-    let recs = (1, sequential) : multiRecs
+  let fname = benchmark ++ "-" ++ show lo ++ ":" ++ show hi ++ "-results"
+      runFor c name = do
+        callProcess
+          "./bin/benchmarks"
+          [ "--json"
+          , reportFileName
+          , "--match"
+          , "prefix"
+          , benchmark ++ "/" ++ name
+          , "+RTS"
+          , "-N" ++ show (c :: Word)
+          ]
+        (_, _, recs) <- either error pure =<< readJSONReports reportFileName
+        pure recs
+  let multiVars = filter (/= "sequential") variants
+  sequential <- runFor 1 "sequential"
+  multiRecs <-
+    forM [lo .. hi] $ \c -> do
+      recs <- concat <$> mapM (runFor c) multiVars
+      pure (c, recs)
+  let recs = (1, sequential) : multiRecs
   -- writeFile ("results/" ++ fname ++ ".csv") $
   --   unlines $
   --   map
@@ -81,8 +81,7 @@ runExperiment lo hi benchmark variants = do
   --        intercalate "," $
   --        show c : map (show . avg) recs ++ map (show . outliers) recs)
   --     recs
-    B.writeFile ("results/" ++ fname ++ ".json") $
-        encode $ toScriptFormat variants recs
+  B.writeFile ("results/" ++ fname ++ ".json") $ encode $ toScriptFormat recs
 
 -- forM ["ohua-bench", "comp-bench", "app-bench", "cond-bench"] $ \benchmark -> do
 setUpExperiment = do
