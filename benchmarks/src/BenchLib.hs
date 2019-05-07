@@ -11,6 +11,7 @@ module BenchLib
     , bgroup
     , nf
     , nfIO
+    , setupTeardownBench
     , makeMain
     , encodeFile
     , decodeFile
@@ -43,12 +44,8 @@ data Result = Result
     } deriving (Generic, Show)
 
 type FinishedExperiment = (Config, [Result])
-data Benchmarkable = forall a. Benchmarkable
-    { bSetup :: IO a
-    , bRun :: a -> IO ()
-    , bCleanup :: a -> IO ()
-    }
-type Benchmark = [(ExpName, Iterations -> IO [Record])]
+type Benchmarkable = Iterations -> IO [Record]
+type Benchmark = [(ExpName, Benchmarkable)]
 
 instance Binary Config
 instance Binary Record
@@ -69,25 +66,23 @@ measureStopWatch (StopWatch begin) = do
         nanosecs = toNanoSecs diff
     pure $ fromIntegral nanosecs
 
-runBench :: Benchmarkable -> Iterations -> IO [Record]
-runBench bm iters =
-    case bm of
-        Benchmarkable setup run cleanup -> do
-            a <- setup
-            let measure = do
-                    performGC
-                    watch <- startStopWatch
-                    run a
-                    stopTime <- measureStopWatch watch
-                    pure $ Record stopTime
-                go 0 = pure []
-                go n = do
-                    r <- measure
-                    rs <- go (n - 1)
-                    pure $ r : rs
-            results <- go iters
-            cleanup a
-            pure results
+setupTeardownBench :: IO a -> (a -> IO b) -> (a -> IO c) -> Benchmarkable
+setupTeardownBench setup run cleanup iters = do
+    a <- setup
+    let measure = do
+            performGC
+            watch <- startStopWatch
+            run a
+            stopTime <- measureStopWatch watch
+            pure $ Record stopTime
+        go 0 = pure []
+        go n = do
+            r <- measure
+            rs <- go (n - 1)
+            pure $ r : rs
+    results <- go iters
+    cleanup a
+    pure results
 
 runBenches :: Config -> Benchmark -> IO [Result]
 runBenches cfg =
@@ -99,7 +94,7 @@ runBenches cfg =
         | otherwise = \i -> any (`isPrefixOf` i) (selection cfg)
 
 bench :: ExpName -> Benchmarkable -> Benchmark
-bench name ac = [(name, runBench ac)]
+bench name ac = [(name, ac)]
 
 bgroup :: ExpName -> [Benchmark] -> Benchmark
 bgroup prefix benches =
@@ -109,23 +104,21 @@ bgroup prefix benches =
     ]
 
 nf :: NFData b => (a -> b) -> a -> Benchmarkable
-nf f a =
-    Benchmarkable
-        { bSetup = f a `deepseq` pure ()
-        , bRun = \() -> let x = f a in x `deepseq` pure ()
-        , bCleanup = const $ pure ()
-        }
+nf f a = setupTeardownBench
+    (f a `deepseq` pure ())
+        (\() ->
+             let x = f a
+              in x `deepseq` pure ())
+        (const $ pure ())
 
 nfIO :: NFData b => IO b -> Benchmarkable
 nfIO ac =
-    Benchmarkable
-        { bSetup = pure ()
-        , bRun =
-              \() -> do
-                  x <- ac
-                  x `deepseq` pure ()
-        , bCleanup = const $ pure ()
-        }
+    setupTeardownBench
+        (pure ())
+        (\() -> do
+             x <- ac
+             x `deepseq` pure ())
+        (const $ pure ())
 
 makeMain :: [Benchmark] -> IO ()
 makeMain bs = do
