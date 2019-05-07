@@ -54,8 +54,8 @@ runExperiment lo hi benchmark variants = do
         "./bin/benchmarks"
         [ "--json"
         , reportFileName
-        , "--iters"
-        , "25"
+        -- , "--iters"
+        -- , "25"
         , "--match"
         , "prefix"
         , benchmark
