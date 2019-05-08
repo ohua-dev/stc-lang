@@ -14,6 +14,11 @@ import Monad.FuturesBasedMonad as Ohua
 sumEuler_ohua :: Int -> Int -> IO Int
 sumEuler_ohua _ n = Ohua.mapReduce euler (+) 0 [n,n - 1 .. 0]
 
+sumEuler_ohua_sum :: Int -> Int -> IO Int
+sumEuler_ohua_sum _ n = do
+  (r, _) <- runOhuaM (sum <$> smap (pure . euler) [n,n - 1 .. 0]) []
+  return r
+
 sumEuler_monadpar :: Int -> Int -> Int
 sumEuler_monadpar _ n = runPar $ sum `fmap` C.parMap euler [n,n - 1 .. 0]
 
@@ -64,6 +69,7 @@ sumEulerBench =
     "sumeuler-bench"
     [ bench "sequential" (nf sumEuler_seq n)
     , bench "ohua" (nfIO $ sumEuler_ohua c n)
+    , bench "ohua_sum" (nfIO $ sumEuler_ohua_sum c n)
     , bench "par" (nf (sumEuler_monadpar c) n)
     ]
     {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
