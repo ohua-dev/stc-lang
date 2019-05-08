@@ -69,7 +69,7 @@ sumEulerBench =
     "sumeuler-bench"
     [ bench "sequential" (nf sumEuler_seq n)
     , bench "ohua" (nfIO $ sumEuler_ohua c n)
-    , bench "ohua_sum" (nfIO $ sumEuler_ohua_sum c n)
+    , bench "sum_ohua" (nfIO $ sumEuler_ohua_sum c n)
     , bench "par" (nf (sumEuler_monadpar c) n)
     ]
     {- Values taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/run_benchmark.hs-}
