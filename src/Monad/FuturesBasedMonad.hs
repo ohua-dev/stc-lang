@@ -36,7 +36,7 @@ import Control.Monad
 
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
-import qualified Control.Concurrent.Async as Async
+import qualified Control.Concurrent as Conc
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.IO as PIO
 import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
@@ -54,12 +54,17 @@ import Data.Set as Set hiding (map)
 import Data.StateElement
 import Data.Void
 import Control.Concurrent.Chan
+import qualified Control.Concurrent.BoundedChan as BC
 
 -- import           Debug.Trace
 import GHC.Generics (Generic)
 
 -- import           Control.DeepSeq
 import Monad.Generator
+
+import System.IO (hPutStrLn, stderr)
+import Control.Exception (bracket)
+import GHC.Stack (HasCallStack)
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b
@@ -195,11 +200,11 @@ instance Monad OhuaM where
   return :: forall a. a -> OhuaM a
   return v = OhuaM return $ \s -> return (v, s)
   {-# NOINLINE (>>=) #-}
-  (>>=) :: forall a b. OhuaM a -> (a -> OhuaM b) -> OhuaM b
+  (>>=) :: HasCallStack => OhuaM a -> (a -> OhuaM b) -> OhuaM b
   f >>= g = OhuaM moveState comp
     where
       moveState ::
-           forall ivar m. (ParIVar ivar m, MonadIO m)
+           forall ivar m. (ParIVar ivar m, MonadIO m, HasCallStack)
         => GlobalState ivar
         -> m (GlobalState ivar)
       moveState gs = do
@@ -207,10 +212,10 @@ instance Monad OhuaM where
         flip moveStateForward gs' $
           g $
           error "Invariant broken: Don't touch me, state forward moving code!"
-      comp ::
-           forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
-        => GlobalState ivar
-        -> m (b, GlobalState ivar)
+      -- comp ::
+      --      forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
+      --   => GlobalState ivar
+      --   -> m (b, GlobalState ivar)
       comp gs
           -- there is no need to spawn here!
           -- pipeline parallelism is solely created by smap.
@@ -474,19 +479,33 @@ liftSignal s0 init = do
                 pure my
             else S.get
 
+debugSignals :: Bool
+debugSignals = True
+
+printSignalD :: MonadIO m => String -> m ()
+printSignalD
+    | debugSignals = liftIO . hPutStrLn stderr
+    | otherwise = const $ pure ()
+
 runSignals :: NFData a => STCLang Signals a -> IO ([a], [S])
 runSignals comp = do
-    putStrLn "Running STCLang"
+    printSignalD "Running STCLang"
     (comp', s) <- S.runStateT comp mempty
-    chan <- newChan
-    putStrLn "Starting signals... "
-    Async.forConcurrently_ (zip [0..] $ signals s) $ \(idx, sig) ->
-        forever $ do
-            event <- sig
-            writeChan chan $ Just (idx, event)
-    putStrLn "done"
-    let signalGen = chanToGenerator chan
-    runOhuaM (smapGen comp' signalGen) $ states s
+    chan <- BC.newBoundedChan 100
+    bracket
+        (do printSignalD "Starting signals... "
+            forM (zip [0 ..] $ signals s) $ \(idx, sig) ->
+                Conc.forkIO $
+                forever $ do
+                    event <- sig
+                    BC.writeChan chan $ Just (idx, event))
+        (\threads -> do
+             printSignalD "Killing signal threads"
+             mapM_ Conc.killThread threads)
+        (\_ -> do
+             putStrLn "signals done"
+             let signalGen = ioReaderToGenerator (BC.readChan chan)
+             runOhuaM (smapGen comp' signalGen) $ states s)
 
 if_ :: (Show a, NFData a) => OhuaM Bool -> OhuaM a -> OhuaM a -> OhuaM a
 if_ cond then_ else_ = do

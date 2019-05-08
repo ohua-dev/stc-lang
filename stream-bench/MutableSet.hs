@@ -7,6 +7,8 @@ module MutableSet
     , insert
     , member
     , mapM_
+    , size
+    , toList
     ) where
 
 import Prelude hiding (mapM_)
@@ -34,6 +36,12 @@ member i t = liftIO $ isJust <$> HT.lookup (unwrap t) i
 
 mapM_ :: MonadIO m => (a -> IO b) -> Set a -> m ()
 mapM_ f = liftIO . HT.mapM_ (f . fst) . unwrap
+
+size :: MonadIO m => Set a -> m Word
+size = liftIO . HT.foldM (\a _ -> pure $ a + 1) 0 . unwrap
+
+toList :: (MonadIO m, Constraint a) => Set a -> m [a]
+toList = liftIO . fmap (map fst) . HT.toList . unwrap
 
 -- This is a weird NFData instance, but the assumption is that HashMaps are
 -- strict in the keys, because computing the hash forces the key. And since a
