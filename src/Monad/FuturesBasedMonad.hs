@@ -27,6 +27,7 @@ module Monad.FuturesBasedMonad
   , liftWithState
   , smapSTC
   , liftSignal
+  , Signal, Signals
   , runSignals
   , filterSignal
   , filterSignalM
@@ -56,7 +57,7 @@ import Data.Void
 import Control.Concurrent.Chan
 import qualified Control.Concurrent.BoundedChan as BC
 
--- import           Debug.Trace
+import           Debug.Trace
 import GHC.Generics (Generic)
 
 -- import           Control.DeepSeq

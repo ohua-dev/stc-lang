@@ -1,5 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
-module MutableNFMap (Map, new, insert, delete, lookup, mapM_) where
+module MutableNFMap (Map, new, insert, delete, lookup, mapM_, size) where
 
 import Prelude hiding (mapM_, lookup)
 import qualified Data.HashTable.IO as MHT
@@ -34,3 +34,6 @@ lookup k m = liftIO $ MHT.lookup (unwrap m) k
 
 mapM_ :: MonadIO m => ((k, v) -> IO a) -> Map k v -> m ()
 mapM_ f = liftIO . MHT.mapM_ f . unwrap
+
+size :: MonadIO m => Map k v -> m Word
+size = liftIO . MHT.foldM (\a _ -> pure $ a + 1) 0 . unwrap
