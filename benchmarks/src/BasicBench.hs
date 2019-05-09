@@ -107,7 +107,8 @@ compPar1 g coll = runPar $ (parMap g >=> parMap g) coll
 compPar2 g coll = runPar $ (parMap $ g . g) coll
 
 {-# INLINE appPar #-}
-appPar g coll = runPar $ (,) <$> parMap g coll <*> parMap g coll
+-- appPar g coll = runPar $ (,) <$> parMap g coll <*> parMap g coll
+appPar g coll = runPar $ parMap (\x -> (,) <$> pure $ g x <*> pure $ g x) coll
 
 {-# INLINE condPar #-}
 condPar g coll =
