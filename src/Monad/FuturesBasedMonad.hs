@@ -193,8 +193,9 @@ instance Applicative OhuaM where
   -- (Collected pf1 sfs1) <*> (Collected pf2 sfs2) = Collected pf1 (sfs1 ++ (pf2:sfs2))
   --  -- this collecting is only stopped by the monadic bind operator!
 
-instance Monad OhuaM where
+instance Monad OhuaM
   --{-# NOINLINE return #-}
+                            where
   return :: forall a. a -> OhuaM a
   return v = OhuaM return $ \s -> return (v, s)
   {-# INLINE return #-}
@@ -239,9 +240,12 @@ liftWithIndex ::
 liftWithIndex = liftWithIndexS
 
 --liftWithIndex i f d = liftWithIndex' i $ f d
-
-liftWithIndexS :: forall a s b.
-     (Show a, NFData s, Typeable s, NFData a) => Int -> SF s a b -> a -> OhuaM b
+liftWithIndexS ::
+     forall a s b. (Show a, NFData s, Typeable s, NFData a)
+  => Int
+  -> SF s a b
+  -> a
+  -> OhuaM b
 liftWithIndexS i f d =
   OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState $ f d)
   where
@@ -294,10 +298,10 @@ liftWithIndex' i comp =
 --{-# NOINLINE release #-}
 release :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 release = updateState
+
 {-# INLINE release #-}
 {-# INLINE updateState #-}
 {-# INLINE getState #-}
-
 updateState :: (NFData s, ParIVar ivar m) => ivar s -> s -> m ()
 updateState = PC.put
 
@@ -486,7 +490,7 @@ liftWithState state stateThread = do
   l <- S.state $ \s -> (length $ states s, s {states = states s ++ [toS s0]})
   pure $ liftWithIndex l stateThread
 
-runSTCLang :: (NFData a, NFData b) => STCLang a b -> a -> IO (b, [S])
+runSTCLang :: (NFData b) => STCLang a b -> a -> IO (b, [S])
 runSTCLang langComp a = do
   (comp, gs) <- S.runStateT langComp mempty
   runOhuaM (comp a) $ states gs
@@ -600,38 +604,43 @@ parMapReduceRangeThresh threshold range fn binop init
   -- sadly I could not use STCLang to build this :(
   -- reason: it must be STCLang a b to implement liftSignal instead of just
   -- STCLang b just like OhuaM b
+  -- (_, [reduceState]) <- runOhuaM mapReduce [toS init]
+  -- return $ fromS reduceState
  = do
-    (_, [reduceState]) <- runOhuaM mapReduce [toS init]
-    return $ fromS reduceState
+  (_, [reduceState]) <- runSTCLang mapReduce chunkGenerator
+  return $ fromS reduceState
   where
     mapReduce = do
-        smapGen
-            ((pure . mapAndCombine) >=>
-             liftWithIndexS 0 reduce)
-            chunkGenerator
+      reduceST <- liftWithState (return init) reduce
+      -- return $\x -> smapGen ((pure . mapAndCombine) >=> reduceST) x
+      return $ smapGen ((pure . mapAndCombine) >=> reduceST)
+    -- mapReduce = do
+    --   smapGen
+    --     ((pure . mapAndCombine) >=> liftWithIndexS 0 reduce)
+    --     chunkGenerator
     chunkGenerator :: Generator IO InclusiveRange
     chunkGenerator =
-        flip stateToGenerator range $ do
-            (InclusiveRange mi ma) <- S.get
-            if mi >= ma
-                then return Nothing
-                else let mi' = min (mi + threshold) ma
-                      in do S.put $ InclusiveRange (mi' + 1) ma
-                            return $ Just $ InclusiveRange mi mi'
+      flip stateToGenerator range $ do
+        (InclusiveRange mi ma) <- S.get
+        if mi >= ma
+          then return Nothing
+          else let mi' = min (mi + threshold) ma
+                in do S.put $ InclusiveRange (mi' + 1) ma
+                      return $ Just $ InclusiveRange mi mi'
     list (InclusiveRange mi ma)
-        | mi >= ma = []
-        | otherwise = InclusiveRange mi mi' : list (InclusiveRange (mi' + 1) ma)
+      | mi >= ma = []
+      | otherwise = InclusiveRange mi mi' : list (InclusiveRange (mi' + 1) ma)
       where
         mi' = min (mi + threshold) ma
     mapAndCombine (InclusiveRange mi ma) =
-        let mapred a b =
-                let x = fn b
-                    result = a `binop` x
-                 in result
-         in List.foldl mapred init [mi .. ma]
+      let mapred a b =
+            let x = fn b
+                result = a `binop` x
+             in result
+       in List.foldl mapred init [mi .. ma]
     reduce v = S.get >>= (S.put . (`binop` v))
---{-# INLINE parMapReduceRangeThresh #-}
 
+--{-# INLINE parMapReduceRangeThresh #-}
 -- streams output from the map phase to the reduce phase
 mapReduce ::
      (NFData a, NFData b, Typeable b, Show a, Show b)
@@ -641,10 +650,10 @@ mapReduce ::
   -> [a]
   -> IO b
 mapReduce mapper reducer init xs = do
-    (_, [reduceState]) <- runOhuaM algo [toS init]
-    return $ fromS reduceState
+  (_, [reduceState]) <- runOhuaM algo [toS init]
+  return $ fromS reduceState
   where
     algo =
-        smapGen (pure . mapper >=> liftWithIndexS 0 reduce) $ listGenerator xs
+      smapGen (pure . mapper >=> liftWithIndexS 0 reduce) $ listGenerator xs
     reduce v = S.get >>= (S.put . (`reducer` v))
 --{-# INLINE mapReduce #-}
