@@ -66,7 +66,8 @@ library
                        aeson,
                        bytestring,
                        foundation,
-                       protolude
+                       protolude,
+                       BoundedChan
   default-language:    Haskell2010
   -- ghc-options:         -auto-all -Wall -O2 -fPIC -ddump-to-file -ddump-simpl -dverbose-core2core -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
   ghc-options:         -Wall -O2 -fPIC -fno-cse -dsuppress-type-applications -dsuppress-coercions -dsuppress-module-prefixes  -dsuppress-idinfo
@@ -186,6 +187,37 @@ executable streams-based-monad-exe
   main-is: Main.hs
   build-depends: base, statefulness
   default-language: Haskell2010
+
+executable ohua-stream-bench
+  hs-source-dirs:      stream-bench
+  main-is:             algo.hs
+  build-depends:       base
+                     , statefulness
+                     , hashtables
+                     , text
+                     , deepseq
+                     , hashable
+                     , time
+                     , mtl
+                     , aeson
+                     , bytestring
+                     , hedis
+                     , uuid-types
+                     , random
+                     , hw-kafka-client
+                     , microlens-aeson
+                     , microlens
+                     , yaml
+                     , random
+                     , clock
+                     , vector
+                     , BoundedChan
+  other-modules:       MutableNFMap
+                     , CampaignProcMap
+                     , MutableSet
+  ghc-options: -threaded -with-rtsopts=-N
+  -- ghc-options:         -optl-static -optl-pthread
+  default-language:    Haskell2010
 
 source-repository head
   type:     git

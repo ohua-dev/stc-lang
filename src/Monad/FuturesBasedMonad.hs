@@ -15,26 +15,32 @@ module Monad.FuturesBasedMonad
   ( smap
   , smapGen
   , case_
+  , if_
   , liftWithIndex
   , liftWithIndex'
   , SF
   , SFM
   , runOhuaM
   , OhuaM
+  , STCLang
   , runSTCLang
   , liftWithState
   , smapSTC
   , liftSignal
+  , Signal
+  , Signals
   , runSignals
   , filterSignal
   , parMapReduceRangeThresh
   , mapReduce
+  , filterSignalM
   ) where
 
 import Control.Monad
 
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
+import qualified Control.Concurrent as Conc
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.Combinator (InclusiveRange, InclusiveRange(..))
 import Control.Monad.Par.IO as PIO
@@ -58,11 +64,18 @@ import Data.Void
 
 import Control.DeepSeq (deepseq)
 
--- import           Debug.Trace
+import qualified Control.Concurrent.BoundedChan as BC
+import Control.Concurrent.Chan
+
+import Debug.Trace
 import GHC.Generics (Generic)
 
 -- import           Control.DeepSeq
 import Monad.Generator
+
+import Control.Exception (bracket)
+import GHC.Stack (HasCallStack)
+import System.IO (hPutStrLn, stderr)
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b
@@ -198,14 +211,12 @@ instance Monad OhuaM
                             where
   return :: forall a. a -> OhuaM a
   return v = OhuaM return $ \s -> return (v, s)
-  {-# INLINE return #-}
-  --{-# NOINLINE (>>=) #-}
-  {-# INLINE (>>=) #-}
-  (>>=) :: forall a b. OhuaM a -> (a -> OhuaM b) -> OhuaM b
+  {-# NOINLINE (>>=) #-}
+  (>>=) :: HasCallStack => OhuaM a -> (a -> OhuaM b) -> OhuaM b
   f >>= g = OhuaM moveState comp
     where
       moveState ::
-           forall ivar m. (ParIVar ivar m, MonadIO m)
+           forall ivar m. (ParIVar ivar m, MonadIO m, HasCallStack)
         => GlobalState ivar
         -> m (GlobalState ivar)
       moveState gs = do
@@ -213,11 +224,10 @@ instance Monad OhuaM
         flip moveStateForward gs' $
           g $
           error "Invariant broken: Don't touch me, state forward moving code!"
-      {-# INLINE moveState #-}
-      comp ::
-           forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
-        => GlobalState ivar
-        -> m (b, GlobalState ivar)
+      -- comp ::
+      --      forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
+      --   => GlobalState ivar
+      --   -> m (b, GlobalState ivar)
       comp gs
           -- there is no need to spawn here!
           -- pipeline parallelism is solely created by smap.
@@ -521,16 +531,46 @@ liftSignal s0 init = do
         pure my
       else S.get
 
+debugSignals :: Bool
+debugSignals = True
+
+printSignalD :: MonadIO m => String -> m ()
+printSignalD
+  | debugSignals = liftIO . hPutStrLn stderr
+  | otherwise = const $ pure ()
+
 runSignals :: NFData a => STCLang Signals a -> IO ([a], [S])
 runSignals comp = do
+  printSignalD "Running STCLang"
   (comp', s) <- S.runStateT comp mempty
-  chan <- newChan
-  forM_ (zip [0 ..] $ signals s) $ \(idx, sig) ->
-    forever $ do
-      event <- sig
-      writeChan chan $ Just (idx, event)
-  let signalGen = chanToGenerator chan
-  runOhuaM (smapGen comp' signalGen) $ states s
+  chan <- BC.newBoundedChan 100
+  bracket
+    (do printSignalD "Starting signals... "
+        forM (zip [0 ..] $ signals s) $ \(idx, sig) ->
+          Conc.forkIO $
+          forever $ do
+            event <- sig
+            BC.writeChan chan $ Just (idx, event))
+    (\threads -> do
+       printSignalD "Killing signal threads"
+       mapM_ Conc.killThread threads)
+    (\_ -> do
+       putStrLn "signals done"
+       let signalGen = ioReaderToGenerator (BC.readChan chan)
+       runOhuaM (smapGen comp' signalGen) $ states s)
+
+if_ :: (Show a, NFData a) => OhuaM Bool -> OhuaM a -> OhuaM a -> OhuaM a
+if_ cond then_ else_ = do
+  i <- cond
+  case_ i [(True, then_), (False, else_)]
+
+filterSignalM ::
+     (Show b, NFData a, NFData b)
+  => (a -> OhuaM Bool)
+  -> (a -> OhuaM b)
+  -> STCLang a (Maybe b)
+filterSignalM cond f =
+  pure $ \item -> if_ (cond item) (Just <$> f item) (pure Nothing)
 
 -- | @filter init p f@ applies @f@ to only those values @a@ that satisfy the
 -- predicate @p@. For values not satisfying it returns the last computed value
@@ -543,10 +583,8 @@ filterSignal ::
   -> STCLang a b
 filterSignal init cond f = do
   g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
-  return $ \item -> do
-    r <- cond item
-    i <- case_ r [(True, Just <$> f item), (False, pure Nothing)]
-    g i
+  fil <- filterSignalM cond f
+  return $ fil >=> g
 
 ----
 -- The below comes originally from: https://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/src/Control-Monad-Par-Combinator.html#parMapReduceRangeThresh

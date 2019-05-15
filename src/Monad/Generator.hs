@@ -16,6 +16,7 @@ module Monad.Generator
   , foldlGenerator_
   , foldlGeneratorT_
   , chanToGenerator
+  , ioReaderToGenerator
   , foldableGenerator
   , foldableGenerator'
   , foldableGenerator''
@@ -139,11 +140,14 @@ foldlGeneratorT_ trans f = foldlGeneratorT trans (\() a -> f a) ()
 foldlGenerator_ :: (IsGenerator g m, Monad m) => (a -> m ()) -> g a -> m ()
 foldlGenerator_ = foldlGeneratorT_ id
 
+ioReaderToGenerator :: (IsGenerator g m, Monad g) => (m (Maybe a)) -> g a
+ioReaderToGenerator reader = recur
+  where
+    recur = maybe finish (`yield` recur) =<< needM reader
+
 chanToGenerator ::
      (MonadIO m, IsGenerator g m, Monad g) => Chan (Maybe a) -> g a
-chanToGenerator c = recur
-  where
-    recur = maybe finish (`yield` recur) =<< needM (liftIO $ readChan c)
+chanToGenerator = ioReaderToGenerator . liftIO . readChan
 
 foldableGenerator :: (Foldable f, IsGenerator g m) => f a -> g a
 foldableGenerator = foldr' yield finish
