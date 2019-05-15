@@ -15,9 +15,9 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:       Monad.FuturesBasedMonad
-                       , Monad.StreamsBasedFreeMonad
-                       , Monad.StreamsBasedExplicitAPI
+  exposed-modules:       Control.Monad.SD.SD
+                       , Control.Monad.DD.StreamsBasedFreeMonad
+                       , Control.Monad.DD.StreamsBasedExplicitAPI
                        -- , Monad.Sbfm
                        , Control.Monad.Ohua.ST
                        , Data.Ohua.STRef
