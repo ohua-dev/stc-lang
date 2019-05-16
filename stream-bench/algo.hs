@@ -580,16 +580,15 @@ algo kafkaReader redisConn stats
     emitCounter procInput
     processCampaign procInput
 
-data CollSt = CollSt
-  { states :: [S]
-  , signals :: [IO S]
-  }
-
-instance Monoid CollSt where
-  mempty = CollSt [] []
-  CollSt st1 si1 `mappend` CollSt st2 si2 =
-    CollSt (st1 `mappend` st2) (si1 `mappend` si2)
-
+-- data CollSt = CollSt
+--   { states :: [S]
+--   , signals :: [IO S]
+--   }
+--
+-- instance Monoid CollSt where
+--   mempty = CollSt [] []
+--   CollSt st1 si1 `mappend` CollSt st2 si2 =
+--     CollSt (st1 `mappend` st2) (si1 `mappend` si2)
 algoSeq kafkaReader redisConn stats
     -- Allocate the basic functions --
  =

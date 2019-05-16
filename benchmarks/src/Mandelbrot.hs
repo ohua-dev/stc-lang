@@ -39,7 +39,7 @@ parMapReduceRangeThresh = C.parMapReduceThresh
 import Control.Monad.Par.Combinator as C
 #endif
 
-import Monad.FuturesBasedMonad as Ohua
+import Control.Monad.SD as Ohua
 import Criterion
 import Criterion.Main
 import Control.Monad.Identity (runIdentity)
@@ -251,7 +251,7 @@ mandelBench =
   bgroup
     "mandel-bench"
     [ bench "sequential" (nfIO (simpleP x y depth parMapReduceRangeThreshSeq))
-    , bench "ohua" (nfIO $ simpleP x y depth Ohua.parMapReduceRangeThresh)
+    , bench "ohua" (nfIO $ simpleP x y depth Ohua.mapReduceRangeThresh)
     , bench "par" (nf (runPar . (simple x y depth)) C.parMapReduceRangeThresh)
     ]
   where

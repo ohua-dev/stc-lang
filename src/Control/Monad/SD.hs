@@ -3,13 +3,16 @@ module Control.Monad.SD
   ( case_
   , if_
   , smap
-  , runOhua
+  , runOhuaM
+  , liftWithIndex
   , OhuaM
   , SF
+  , SFM
   -- | STCLang re-exports
   , runSTCLang
   , liftWithState
   , STCLang
+  , CollSt(..)
   -- | Signals re-exports
   , liftSignal
   , runSignals

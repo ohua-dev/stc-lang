@@ -7,9 +7,9 @@ import Control.Monad.Par
 {-Code taken from: https://github.com/simonmar/monad-par/blob/master/examples/src/sumeuler/sumeuler.hs -}
 import qualified Control.Monad.Par.Combinator as C
 
+import Control.Monad.SD as Ohua
 import Criterion
 import Criterion.Main
-import Monad.FuturesBasedMonad as Ohua
 
 sumEuler_ohua :: Int -> Int -> IO Int
 sumEuler_ohua _ n = Ohua.mapReduce euler (+) 0 [n,n - 1 .. 0]

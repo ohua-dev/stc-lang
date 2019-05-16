@@ -11,6 +11,7 @@ module BasicBench
 import Control.Concurrent
 import Control.DeepSeq
 import Control.Monad ((>=>))
+import Control.Monad.SD
 import Control.Monad.State.Lazy (get, put)
 import Criterion
 import Criterion.IO
@@ -20,7 +21,6 @@ import Criterion.Types (Verbosity(Quiet), verbosity)
 import Data.StateElement
 import Data.Time.Clock.POSIX
 import Data.Word
-import Monad.FuturesBasedMonad
 import System.IO (stdout)
 
 import Control.Monad.Par (runPar)

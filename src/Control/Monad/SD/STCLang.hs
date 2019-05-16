@@ -7,7 +7,6 @@ module Control.Monad.SD.STCLang
   , CollSt(..)
   ) where
 
-import Control.Monad.SD.Case
 import Control.Monad.SD.Ohua
 import Control.Monad.SD.Smap
 import Data.Dynamic2

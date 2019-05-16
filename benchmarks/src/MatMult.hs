@@ -34,7 +34,7 @@ import PARSCHED
 import Control.Monad.Par
 #endif
 
-import Monad.FuturesBasedMonad
+import Control.Monad.SD
 import Criterion
 import Criterion.Main
 -------------------------------------

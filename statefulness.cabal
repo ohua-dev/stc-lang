@@ -34,6 +34,12 @@ library
                        , Control.Monad.Stream.Par
                        , Control.Monad.Stream.PinnedChan
                        , Data.Statistics
+  other-modules:         Control.Monad.SD.Case
+                       , Control.Monad.SD.Combinator
+                       , Control.Monad.SD.FRP
+                       , Control.Monad.SD.Ohua
+                       , Control.Monad.SD.STCLang
+                       , Control.Monad.SD.Smap
   if impl(ghc >= 8.2.0)
     other-modules:       Type.Magic.GHC8
   else

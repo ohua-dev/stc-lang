@@ -59,7 +59,7 @@ import qualified Data.Array.Unboxed as U
 import System.Environment
 
 
-import Monad.FuturesBasedMonad
+import Control.Monad.SD
 import Criterion
 import Criterion.Main
 --------------------------------------------------------------------------------
