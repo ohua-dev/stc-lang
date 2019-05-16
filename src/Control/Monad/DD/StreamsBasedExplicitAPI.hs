@@ -3,11 +3,11 @@
 
 module Control.Monad.DD.StreamsBasedExplicitAPI where
 
+import Control.Monad.DD.StreamsBasedFreeMonad
 import Control.Monad.State
 import Data.Dynamic2
 import Data.Typeable
 import Lens.Micro
-import Monad.StreamsBasedFreeMonad
 import Ohua.Types
 
 import Control.DeepSeq (NFData, force)

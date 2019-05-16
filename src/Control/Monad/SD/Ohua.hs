@@ -8,41 +8,26 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
 --- this implementation does not rely on channels. it builds on futures!
-module Monad.FuturesBasedMonad
-  ( smap
-  , smapGen
-  , case_
-  , if_
-  , liftWithIndex
+module Control.Monad.SD.Ohua
+  ( liftWithIndex
   , liftWithIndex'
   , SF
   , SFM
   , runOhuaM
   , OhuaM
-  , STCLang
-  , runSTCLang
-  , liftWithState
-  , smapSTC
-  , liftSignal
-  , Signal
-  , Signals
-  , runSignals
-  , filterSignal
-  , parMapReduceRangeThresh
-  , mapReduce
-  , filterSignalM
+  , OhuaM(..)
+  , GlobalState
+  , GlobalState(..)
   ) where
 
 import Control.Monad
 
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
-import qualified Control.Concurrent as Conc
 import Control.Monad.Par.Class as PC
-import Control.Monad.Par.Combinator (InclusiveRange, InclusiveRange(..))
+
 import Control.Monad.Par.IO as PIO
 
 -- import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
@@ -64,18 +49,8 @@ import Data.Void
 
 import Control.DeepSeq (deepseq)
 
-import qualified Control.Concurrent.BoundedChan as BC
-import Control.Concurrent.Chan
-
-import Debug.Trace
 import GHC.Generics (Generic)
-
--- import           Control.DeepSeq
-import Monad.Generator
-
-import Control.Exception (bracket)
 import GHC.Stack (HasCallStack)
-import System.IO (hPutStrLn, stderr)
 
 -- type SFM s b = State s b
 type SFM s b = StateT s IO b
@@ -269,6 +244,10 @@ liftWithIndexS i f d =
      = do
       let ithIn = gsIn !! i
           ithOut = gsOut !! i
+      -- if we do not deepseq here then a previous parallel stage will get
+      -- serialized at this point because the monadic operation will always
+      -- be evaluated first and then the computation that computes the input
+      -- for this algo.
       d `deepseq` pure ()
       localState <- getState ithIn -- this synchronizes access to the local state
       (d', localState') <- liftIO $ runSF sf $ fromS localState

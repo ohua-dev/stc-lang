@@ -1,10 +1,20 @@
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Control.Monad.SD.Smap
   ( smap
   , smapGen
   ) where
 
+import Control.Monad
+import Control.Monad.IO.Class
 import Control.Monad.Par.Class as PC
-import Monad.FuturesBasedMonad
+import Control.Monad.SD.Ohua
+import Data.StateElement
+import Monad.Generator
 
 -- FIXME this should be based on smapGen!
 -- this spawns the computations for the elements but integrates the
@@ -98,15 +108,6 @@ smapGen algo gen =
             Nothing -> pure <$> runLastAlgo
             Just (a', gen'') -> do
               newStateVec <- newEmptyStateVec
-              -- the parallelism is in the applicative.
-              -- runAlgo immediately returns and gives me an IVar.
-              -- go is the recursion.
-              -- I need to change `go` to take the current list of IVars.
-              -- Then a simple version of throttling becomes totally easy.
-              -- I just need to check the length of the list and once it has
-              -- reached the predefined threshold, I need to stop and wait for
-              -- the IVar at the head of the list before contiuing to spawn.
-              -- (This assumes that the head is the one finishing first.)
               (:) <$> runAlgo a stateIn newStateVec <*> go newStateVec gen'' a'
           where
             runLastAlgo = runAlgo a stateIn lastStateOut
@@ -115,23 +116,22 @@ smapGen algo gen =
       => GlobalState ivar
       -> m (GlobalState ivar)
     moveState = moveStateForward $ algo (undefined :: a)
-
-unthrottledPipe :: () => [ivar S] -> Generator IO a -> [ivar b]
-unthrottledPipe stateIn gen' a =
-  liftIO (step gen') >>= \case
-    Nothing -> pure <$> runLastAlgo
-    Just (a', gen'') -> do
-      newStateVec <- newEmptyStateVec
-      -- the parallelism is in the applicative.
-      -- runAlgo immediately returns and gives me an IVar.
-      -- go is the recursion.
-      -- I need to change `go` to take the current list of IVars.
-      -- Then a simple version of throttling becomes totally easy.
-      -- I just need to check the length of the list and once it has
-      -- reached the predefined threshold, I need to stop and wait for
-      -- the IVar at the head of the list before contiuing to spawn.
-      -- (This assumes that the head is the one finishing first.)
-      (:) <$> runAlgo a stateIn newStateVec <*>
-        unthrottledPipe newStateVec gen'' a'
-  where
-    runLastAlgo = runAlgo a stateIn lastStateOut
+-- unthrottledPipe :: () => [ivar S] -> Generator IO a -> [ivar b]
+-- unthrottledPipe stateIn gen' a =
+--   liftIO (step gen') >>= \case
+--     Nothing -> pure <$> runLastAlgo
+--     Just (a', gen'') -> do
+--       newStateVec <- newEmptyStateVec
+--       -- the parallelism is in the applicative.
+--       -- runAlgo immediately returns and gives me an IVar.
+--       -- go is the recursion.
+--       -- I need to change `go` to take the current list of IVars.
+--       -- Then a simple version of throttling becomes totally easy.
+--       -- I just need to check the length of the list and once it has
+--       -- reached the predefined threshold, I need to stop and wait for
+--       -- the IVar at the head of the list before contiuing to spawn.
+--       -- (This assumes that the head is the one finishing first.)
+--       (:) <$> runAlgo a stateIn newStateVec <*>
+--         unthrottledPipe newStateVec gen'' a'
+--   where
+--     runLastAlgo = runAlgo a stateIn lastStateOut

@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:       Control.Monad.SD.SD
+  exposed-modules:       Control.Monad.SD
                        , Control.Monad.DD.StreamsBasedFreeMonad
                        , Control.Monad.DD.StreamsBasedExplicitAPI
                        -- , Monad.Sbfm

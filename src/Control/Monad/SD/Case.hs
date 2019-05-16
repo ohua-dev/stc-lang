@@ -1,9 +1,19 @@
+{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Control.Monad.SD.Case
   ( case_
   , if_
   ) where
 
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Par.Class as PC
 import Control.Monad.SD.Ohua
+import Data.StateElement
+
+import Data.List as List
+import Data.Maybe
 
 case_ ::
      forall a p. (NFData a, Show a, Eq p)

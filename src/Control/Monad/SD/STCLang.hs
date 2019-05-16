@@ -1,11 +1,20 @@
+{-# LANGUAGE ExplicitForAll #-}
+
 module Control.Monad.SD.STCLang
-  ( liftWithState
+  ( STCLang
+  , liftWithState
   , runSTCLang
+  , CollSt(..)
   ) where
 
 import Control.Monad.SD.Case
 import Control.Monad.SD.Ohua
 import Control.Monad.SD.Smap
+import Data.Dynamic2
+import Data.StateElement
+
+import Control.DeepSeq (NFData)
+import Control.Monad.State as S
 
 data CollSt = CollSt
   { states :: [S]

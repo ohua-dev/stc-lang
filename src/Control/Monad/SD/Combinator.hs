@@ -1,6 +1,20 @@
+{-# LANGUAGE ExplicitForAll #-}
+
 module Control.Monad.SD.Combinator where
 
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Par.Class as PC
+import Control.Monad.Par.Combinator (InclusiveRange, InclusiveRange(..))
 import Control.Monad.SD.Ohua
+import Control.Monad.SD.STCLang
+import Control.Monad.SD.Smap
+import Data.Dynamic2
+import Data.StateElement
+import Monad.Generator
+
+import Control.Monad.State as S
+import Data.List as List
   ----
   -- The below comes originally from: https://hackage.haskell.org/package/monad-par-extras-0.3.3/docs/src/Control-Monad-Par-Combinator.html#parMapReduceRangeThresh
   ----
@@ -44,6 +58,8 @@ import Control.Monad.SD.Ohua
   --       r <- get rght
   --       l `binop` r
 
+import Control.Monad.SD.Ohua
+
 instance Show InclusiveRange
 
 mapReduceRangeThresh ::
@@ -70,7 +86,7 @@ mapReduceRangeThresh threshold range fn binop init
       return $ smapGen ((pure . mapAndCombine) >=> reduceST)
       -- mapReduce = do
       --   smapGen
-      --     ((pure . mapAndCombine) >=> liftWithIndexS 0 reduce)
+      --     ((pure . mapAndCombine) >=> liftWithIndex 0 reduce)
       --     chunkGenerator
     chunkGenerator :: Generator IO InclusiveRange
     chunkGenerator =
@@ -107,7 +123,6 @@ mapReduce mapper reducer init xs = do
   (_, [reduceState]) <- runOhuaM algo [toS init]
   return $ fromS reduceState
   where
-    algo =
-      smapGen (pure . mapper >=> liftWithIndexS 0 reduce) $ listGenerator xs
+    algo = smapGen (pure . mapper >=> liftWithIndex 0 reduce) $ listGenerator xs
     reduce v = S.get >>= (S.put . (`reducer` v))
   --{-# INLINE mapReduce #-}

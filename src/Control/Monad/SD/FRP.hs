@@ -1,12 +1,29 @@
-module Control.Monad.SD.Signals
+{-# LANGUAGE NamedFieldPuns #-}
+
+module Control.Monad.SD.FRP
   ( liftSignal
   , runSignals
   , filterSignalM
   , filterSignal
+  , Signals
   ) where
 
+import Control.Monad.SD.Case
 import Control.Monad.SD.Ohua
 import Control.Monad.SD.STCLang
+import Control.Monad.SD.Smap
+import Data.Dynamic2
+import Data.StateElement
+import Monad.Generator
+
+import qualified Control.Concurrent as Conc
+import qualified Control.Concurrent.BoundedChan as BC
+import Control.Concurrent.Chan
+import Control.DeepSeq (NFData)
+import Control.Exception (bracket)
+import Control.Monad.State as S
+import GHC.Stack (HasCallStack)
+import System.IO (hPutStrLn, stderr)
 
 type Signal = IO
 
