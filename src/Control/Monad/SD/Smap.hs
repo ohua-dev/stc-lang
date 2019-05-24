@@ -3,6 +3,8 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Control.Monad.SD.Smap
   ( smap
@@ -78,6 +80,19 @@ smap algo xs =
             spawnComp e stateVec =
               PC.spawn $ runOhua (f e) $ GlobalState prevState stateVec
 
+type AlgoRunner m ivar t result
+     --(ParIVar ivar m, MonadIO m, MonadIO ivar) =>
+   = t -> [ivar S] -> [ivar S] -> m (ivar (result, GlobalState ivar))
+
+type PipelineStrategy a b
+   = forall ivar m. (ParIVar ivar m, MonadIO m) =>
+                      AlgoRunner m ivar a b -- algo runner
+                       -> Int -- state vector size
+                           -> [ivar S] -- final state vector
+                               -> [ivar S] -- current state vector
+                                   -> Generator IO a -> a -> m [ivar ( b
+                                                                     , GlobalState ivar)]
+
 -- Again like smap this cannot deal with empty generators. Furthermore
 -- it always advances the generator one position more than what it
 -- currently processes to find the end of the generator before the
@@ -88,7 +103,15 @@ smapGen ::
   => (a -> OhuaM b)
   -> Generator IO a
   -> OhuaM [b]
-smapGen algo gen =
+smapGen = smapGenInternal unthrottledPipe
+
+smapGenInternal ::
+     forall a b. (NFData b, Show a)
+  => PipelineStrategy a b
+  -> (a -> OhuaM b)
+  -> Generator IO a
+  -> OhuaM [b]
+smapGenInternal pipelineStrategy algo gen =
   OhuaM moveState $ \g@(GlobalState gsIn gsOut) ->
     liftIO (step gen) >>= \case
       Nothing -> fmap (([] :: [b]), ) $ moveState g
@@ -97,41 +120,60 @@ smapGen algo gen =
         values <- mapM PC.get futures
         pure (map fst values, GlobalState gsIn gsOut)
   where
-    spawnFutures lastStateOut = go
+    spawnFutures lastStateOut = pipelineStrategy runAlgo stateVSize lastStateOut
       where
-        newEmptyStateVec = sequence $ replicate stateVSize PC.new -- create the new output state
         stateVSize = length lastStateOut
         runAlgo e stateIn stateOut =
           PC.spawn $ runOhua (algo e) $ GlobalState stateIn stateOut
-        go stateIn gen' a =
-          liftIO (step gen') >>= \case
-            Nothing -> pure <$> runLastAlgo
-            Just (a', gen'') -> do
-              newStateVec <- newEmptyStateVec
-              (:) <$> runAlgo a stateIn newStateVec <*> go newStateVec gen'' a'
-          where
-            runLastAlgo = runAlgo a stateIn lastStateOut
     moveState ::
          forall ivar m. (ParIVar ivar m, MonadIO m)
       => GlobalState ivar
       -> m (GlobalState ivar)
     moveState = moveStateForward $ algo (undefined :: a)
--- unthrottledPipe :: () => [ivar S] -> Generator IO a -> [ivar b]
--- unthrottledPipe stateIn gen' a =
---   liftIO (step gen') >>= \case
---     Nothing -> pure <$> runLastAlgo
---     Just (a', gen'') -> do
---       newStateVec <- newEmptyStateVec
---       -- the parallelism is in the applicative.
---       -- runAlgo immediately returns and gives me an IVar.
---       -- go is the recursion.
---       -- I need to change `go` to take the current list of IVars.
---       -- Then a simple version of throttling becomes totally easy.
---       -- I just need to check the length of the list and once it has
---       -- reached the predefined threshold, I need to stop and wait for
---       -- the IVar at the head of the list before contiuing to spawn.
---       -- (This assumes that the head is the one finishing first.)
---       (:) <$> runAlgo a stateIn newStateVec <*>
---         unthrottledPipe newStateVec gen'' a'
+
+newEmptyStateVec size = sequence $ replicate size PC.new
+
+unthrottledPipe :: PipelineStrategy a b
+unthrottledPipe runAlgo stateVSize lastStateOut stateIn gen' a =
+  liftIO (step gen') >>= \case
+    Nothing -> pure <$> runLastAlgo
+    Just (a', gen'') -> do
+      newStateVec <- newEmptyStateVec stateVSize
+      -- the parallelism is in the applicative.
+      -- runAlgo immediately returns and gives me an IVar.
+      -- go is the recursion.
+      -- I need to change `go` to take the current list of IVars.
+      -- Then a simple version of throttling becomes totally easy.
+      -- I just need to check the length of the list and once it has
+      -- reached the predefined threshold, I need to stop and wait for
+      -- the IVar at the head of the list before contiuing to spawn.
+      -- (This assumes that the head is the one finishing first.)
+      (:) <$> runAlgo a stateIn newStateVec <*>
+        unthrottledPipe runAlgo stateVSize lastStateOut newStateVec gen'' a'
+  where
+    runLastAlgo = runAlgo a stateIn lastStateOut
+-- throttledPipe :: PipelineStrategy a b
+-- throttledPipe runAlgo stateVSize lastStateOut stateIn gen a = go []
 --   where
+--     go results sIn gen' a'
+--       -- 1. get the first 10
+--       -- 2. do get on head of results before spawning a new computation
+--      = do
+--       liftIO (step gen') >>= \case
+--         Nothing -> pure $ [results] ++ runLastAlgo
+--         Just (a'', gen'') -> do
+--           newStateVec <- newEmptyStateVec stateVSize
+--           -- the parallelism is in the applicative.
+--           -- runAlgo immediately returns and gives me an IVar.
+--           -- go is the recursion.
+--           -- I need to change `go` to take the current list of IVars.
+--           -- Then a simple version of throttling becomes totally easy.
+--           -- I just need to check the length of the list and once it has
+--           -- reached the predefined threshold, I need to stop and wait for
+--           -- the IVar at the head of the list before contiuing to spawn.
+--           -- (This assumes that the head is the one finishing first.)
+--           -- (:) <$> runAlgo a stateIn newStateVec <*>
+--           --   unthrottledPipe runAlgo stateVSize lastStateOut newStateVec gen'' a'
+--           ivar <- runAlgo a' sIn newStateVec
+--           go (results ++ [ivar]) newStateVec gen'' a''
 --     runLastAlgo = runAlgo a stateIn lastStateOut
