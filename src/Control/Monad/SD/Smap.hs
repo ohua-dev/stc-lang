@@ -85,7 +85,7 @@ type AlgoRunner m ivar t result
    = t -> [ivar S] -> [ivar S] -> m (ivar (result, GlobalState ivar))
 
 type PipelineStrategy a b
-   = forall ivar m. (ParIVar ivar m, MonadIO m) =>
+   = forall m ivar. (ParIVar ivar m, MonadIO m) =>
                       AlgoRunner m ivar a b -- algo runner
                        -> Int -- state vector size
                            -> [ivar S] -- final state vector
@@ -152,28 +152,60 @@ unthrottledPipe runAlgo stateVSize lastStateOut stateIn gen' a =
         unthrottledPipe runAlgo stateVSize lastStateOut newStateVec gen'' a'
   where
     runLastAlgo = runAlgo a stateIn lastStateOut
--- throttledPipe :: PipelineStrategy a b
--- throttledPipe runAlgo stateVSize lastStateOut stateIn gen a = go []
---   where
---     go results sIn gen' a'
---       -- 1. get the first 10
---       -- 2. do get on head of results before spawning a new computation
---      = do
---       liftIO (step gen') >>= \case
---         Nothing -> pure $ [results] ++ runLastAlgo
---         Just (a'', gen'') -> do
---           newStateVec <- newEmptyStateVec stateVSize
---           -- the parallelism is in the applicative.
---           -- runAlgo immediately returns and gives me an IVar.
---           -- go is the recursion.
---           -- I need to change `go` to take the current list of IVars.
---           -- Then a simple version of throttling becomes totally easy.
---           -- I just need to check the length of the list and once it has
---           -- reached the predefined threshold, I need to stop and wait for
---           -- the IVar at the head of the list before contiuing to spawn.
---           -- (This assumes that the head is the one finishing first.)
---           -- (:) <$> runAlgo a stateIn newStateVec <*>
---           --   unthrottledPipe runAlgo stateVSize lastStateOut newStateVec gen'' a'
---           ivar <- runAlgo a' sIn newStateVec
---           go (results ++ [ivar]) newStateVec gen'' a''
---     runLastAlgo = runAlgo a stateIn lastStateOut
+
+limit :: Int
+limit = 10
+
+throttledPipe :: PipelineStrategy a b
+throttledPipe runAlgo stateVSize lastStateOut stateIn gen a
+    -- 1. get the first n
+ = do
+  (genLimited, a', lastLimitOut, firstResults) <-
+    unthrottled limit [] stateIn gen a
+    -- 2. get on head of results before spawning a new computation
+  throttled firstResults 0 lastLimitOut genLimited a'
+    -- unthrottled ::
+    --      Int
+    --   -> [ivar (b, GlobalState ivar)]
+    --   -> [ivar S]
+    --   -> [ivar S]
+    --   -> Generator IO a
+    --   -> a
+    --   -> m (Generator IO a, a, [ivar S], [ivar (b, GlobalState ivar)])
+  where
+    unthrottled l results sIn gen' a' = do
+      if l == 0
+        then return (gen', a', sIn, results)
+        else do
+          liftIO (step gen') >>= \case
+            Nothing -> do
+              res <- runAlgo a' sIn lastStateOut
+              -- from now on the generator always returns NOTHING, so it is
+              -- ok to use it as the state input vector to the next iteration.
+              return (gen', a', lastStateOut, results ++ [res])
+            Just (a'', gen'') -> do
+              newStateVec <- newEmptyStateVec stateVSize
+              resultFuture <- runAlgo a' sIn newStateVec
+              unthrottled
+                (l - 1)
+                (results ++ [resultFuture])
+                newStateVec
+                gen''
+                a''
+    -- throttled ::
+      --    [ivar (b, GlobalState ivar)]
+      -- -> Int
+      -- -> [ivar S]
+      -- -> Generator IO a
+      -- -> a
+      -- -> m [ivar (b, GlobalState ivar)]
+    throttled results lastPending sIn gen' a' = do
+      _ <- PC.get $ results !! lastPending -- throttling
+      liftIO (step gen') >>= \case
+        Nothing -> do
+          res <- runAlgo a' sIn lastStateOut
+          return $ results ++ [res]
+        Just (a'', gen'') -> do
+          newStateVec <- newEmptyStateVec stateVSize
+          ivar <- runAlgo a' sIn newStateVec
+          throttled (results ++ [ivar]) (lastPending + 1) newStateVec gen'' a''
