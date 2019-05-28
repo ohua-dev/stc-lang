@@ -36,12 +36,14 @@ module Monad.FuturesBasedMonad
 import Control.Monad
 
 -- import           Control.Monad.Par       as P
-import Control.Arrow (first)
+import Control.Arrow (first, Arrow, arr, ArrowChoice, left)
 import qualified Control.Concurrent as Conc
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.IO as PIO
 import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
 import Control.Monad.State as S
+import qualified Control.Category as Cat
+import qualified Data.Bifunctor
 
 --
 -- for debugging only:
@@ -56,6 +58,7 @@ import Data.StateElement
 import Data.Void
 import Control.Concurrent.Chan
 import qualified Control.Concurrent.BoundedChan as BC
+import Control.DeepSeq (rnf)
 
 import           Debug.Trace
 import GHC.Generics (Generic)
@@ -530,3 +533,41 @@ filterSignal init cond f = do
     g <- liftWithState init $ maybe S.get (\i -> S.put i >> pure i)
     fil <- filterSignalM cond f
     return $ fil >=> g
+
+
+newtype OhuaKlei b c = OhuaKlei (b -> OhuaM c)
+
+instance Cat.Category OhuaKlei where
+    id = OhuaKlei (pure . id)
+    OhuaKlei g . OhuaKlei f = OhuaKlei $ \a -> f a >>= g
+instance Arrow OhuaKlei where
+    arr = OhuaKlei . (pure .)
+    first (OhuaKlei f) = OhuaKlei $ \ ~(a,b) -> (,) <$> f a <*> pure b
+
+isLeft :: Either a b -> Bool
+isLeft (Left _) = True
+isLeft _ = False
+
+fromLeft :: Either a b -> a
+fromLeft (Left a) = a
+fromLeft _ = undefined
+
+coerceRight :: Either a b -> Either c b
+coerceRight (Right r) = Right r
+coerceRight _ = undefined
+
+newtype LazyUnshowable a = LazyUnshowable { unwrapLU :: a }
+
+instance Show (LazyUnshowable a) where show = const ""
+instance NFData (LazyUnshowable a) where rnf = const ()
+
+instance ArrowChoice OhuaKlei where
+    left ::
+         OhuaKlei b c
+        -> OhuaKlei (Either b d) (Either c d)
+    left (OhuaKlei f) =
+        OhuaKlei $ \a ->
+            Data.Bifunctor.bimap unwrapLU unwrapLU <$> if_
+                (pure $ isLeft a)
+                (Left . LazyUnshowable <$> f (fromLeft a))
+                (pure $ coerceRight $ Data.Bifunctor.second LazyUnshowable a)
