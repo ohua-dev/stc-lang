@@ -1,4 +1,4 @@
-module PerformanceFuturesBasedMonad where
+module SD.Performance where
 
 import Test.HUnit hiding (State)
 import Test.Framework
@@ -6,7 +6,7 @@ import Test.Framework.Providers.HUnit
 
 import FakeComputation (work,wrk_sins)
 
-import Monad.FuturesBasedMonad
+import Control.Monad.SD
 import Data.StateElement
 
 import Data.Time.Clock.POSIX

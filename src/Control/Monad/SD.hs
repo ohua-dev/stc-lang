@@ -1,6 +1,7 @@
 module Control.Monad.SD
+  (   
   -- | Base functionality
-  ( case_
+    case_
   , if_
   , smap
   , runOhuaM
@@ -13,6 +14,7 @@ module Control.Monad.SD
   , liftWithState
   , STCLang
   , CollSt(..)
+  , smapSTC
   -- | Signals re-exports
   , liftSignal
   , runSignals

@@ -126,12 +126,12 @@ test-suite statefulness-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
-  other-modules:       CorrectnessFuturesBasedMonad
-                     , CorrectnessStreamsBasedMonad
+  other-modules:       SD.Correctness
+                     , DD.Correctness
                      , STMonadStateThreads
                      , FakeComputation
-                     , PerformanceFuturesBasedMonad
-                     , PerformanceStreamsBasedMonad
+                     , SD.Performance
+                     , DD.Performance
                      , SBFMPerfBenchmark
   build-depends:       base
                      , statefulness

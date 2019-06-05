@@ -5,6 +5,7 @@ module Control.Monad.SD.STCLang
   , liftWithState
   , runSTCLang
   , CollSt(..)
+  , smapSTC
   ) where
 
 import Control.Monad.SD.Ohua

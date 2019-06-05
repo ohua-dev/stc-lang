@@ -1,13 +1,13 @@
 {-# LANGUAGE FlexibleContexts, ImplicitParams, RankNTypes, ExplicitForAll, ConstraintKinds #-}
 
-module CorrectnessStreamsBasedMonad where
+module DD.Correctness where
 
 import Test.HUnit hiding (State)
 import Test.Framework
 import Test.Framework.Providers.HUnit
 
-import Monad.StreamsBasedFreeMonad
-import Monad.StreamsBasedExplicitAPI 
+import Control.Monad.DD.StreamsBasedFreeMonad
+import Control.Monad.DD.StreamsBasedExplicitAPI 
 import Data.Dynamic2
 import Control.Monad.Stream.Par
 import Control.Monad.Stream.Chan

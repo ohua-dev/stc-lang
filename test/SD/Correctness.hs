@@ -1,5 +1,5 @@
 
-module CorrectnessFuturesBasedMonad where
+module SD.Correctness where
 
 import Control.Monad.State
 import Control.Exception
@@ -10,7 +10,7 @@ import Test.Framework.Providers.HUnit
 -- import Data.Monoid
 -- import Utils
 
-import Monad.FuturesBasedMonad
+import Control.Monad.SD
 import Data.StateElement
 
 foo :: Int -> StateT Int IO Int
@@ -88,8 +88,8 @@ smapOverEmptyList = do
 
 simpleCompositionPackaged v = do
   c <- return v
-  r0 <- liftWithIndex' 0 $ foo c
-  r1 <- liftWithIndex' 1 $ bar r0
+  r0 <- liftWithIndex 0 foo c
+  r1 <- liftWithIndex 1 bar r0
   return r1
 
 caseComp idxFoo idxBranch1 idxBranch2 v = do

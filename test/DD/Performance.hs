@@ -1,5 +1,5 @@
 {-# LANGUAGE RankNTypes, ExplicitForAll, OverloadedStrings #-}
-module PerformanceStreamsBasedMonad where
+module DD.Performance where
 
 import Test.HUnit hiding (State)
 import Test.Framework
