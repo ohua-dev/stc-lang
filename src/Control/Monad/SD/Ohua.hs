@@ -232,7 +232,7 @@ liftWithIndexS ::
   -> a
   -> OhuaM b
 liftWithIndexS i f d =
-  OhuaM (fmap snd . compAndMoveState idSf) (compAndMoveState $ f d)
+  OhuaM (moveState d) (compAndMoveState $ f d)
   where
     compAndMoveState ::
          forall ivar m a. (ParIVar ivar m, MonadIO m)
@@ -253,6 +253,20 @@ liftWithIndexS i f d =
       (d', localState') <- liftIO $ runSF sf $ fromS localState
       release ithOut $ toS localState'
       return (d', GlobalState gsIn gsOut)
+
+    moveState :: 
+        forall ivar m a. (ParIVar ivar m, MonadIO m)
+      => a 
+      -> GlobalState ivar 
+      -> m (GlobalState ivar)
+    moveState token (GlobalState gsIn gsOut) = do
+      let ithIn = gsIn !! i
+          ithOut = gsOut !! i
+      localState <- getState ithIn
+      (_, localState') <- return (d, localState) -- id
+      release ithOut localState'
+      return $ GlobalState gsIn gsOut
+
     idSf :: SFM s ()
     idSf = return ()
     {-# INLINE idSf #-}
