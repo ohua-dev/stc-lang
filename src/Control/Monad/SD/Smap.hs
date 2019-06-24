@@ -5,6 +5,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE CPP #-}
+
 
 module Control.Monad.SD.Smap
   ( smap
@@ -103,7 +105,11 @@ smapGen ::
   => (a -> OhuaM b)
   -> Generator IO a
   -> OhuaM [b]
+#ifdef UNTHROTTLED
 smapGen = smapGenInternal unthrottledPipe
+#else
+smapGen = smapGenInternal throttledPipe
+#endif
 
 smapGenInternal ::
      forall a b. (NFData b, Show a)
