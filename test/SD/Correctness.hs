@@ -84,7 +84,14 @@ packagedSmapResultUsed = do
 
 smapOverEmptyList = do
   r1 <- smap simpleComposition []
-  smap simpleComposition [length r1]
+  smap someComp [length r1]
+  where
+    someComp i = do
+        r0 <- liftWithIndex 2 foo i
+        liftWithIndex 3 bar r0
+
+smapOverEmptyList2 =
+    smap (smap simpleComposition) [[], [1..3]]
 
 simpleCompositionPackaged v = do
   c <- return v
@@ -221,8 +228,13 @@ notEnoughStateTest = do
 
 smapHandlesEmptyList :: Assertion
 smapHandlesEmptyList =
-    void (runOhuaM smapOverEmptyList (map toS [0 .. 4 :: Int])) `catch` \ErrorCall {} ->
-        assertFailure "Exception was thrown"
+    void (runOhuaM smapOverEmptyList (map toS [0 .. 3 :: Int]))
+
+smapHandlesEmptyList2 :: Assertion
+smapHandlesEmptyList2 = do
+    (res, _) <-
+        runOhuaM smapOverEmptyList2 (map toS [0 .. 1 :: Int])
+    assertEqual "lengths differ" [0, 3] (map length res)
 
 
 testSuite :: Test.Framework.Test
@@ -235,6 +247,7 @@ testSuite =
         , testCase "checking smap with context" smapContextTest
         , testCase "checking smap result used" smapResultUsedTest
         , testCase "smap over empty list" smapHandlesEmptyList
+        , testCase "nested smap over empty list" smapHandlesEmptyList2
         , testCase "checking packaged version" packagedBindTest
         , testCase "checking case statement" caseTest
         , testCase "checking smap-case composition" caseSmapTest

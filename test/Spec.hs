@@ -24,9 +24,7 @@ import Control.Monad.Stream.Par
 
 main :: IO ()
 main =
-    flip
-        defaultMainWithOpts
-        mempty
+    defaultMain
         -- [PFBM.testSuite]
         --[PSBFM.testSuite]
         [FBM.testSuite]
