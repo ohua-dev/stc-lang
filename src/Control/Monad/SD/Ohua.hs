@@ -8,6 +8,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE CPP #-}
 
 --- this implementation does not rely on channels. it builds on futures!
 module Control.Monad.SD.Ohua
@@ -23,6 +24,7 @@ module Control.Monad.SD.Ohua
   ) where
 
 import Control.Monad
+import Control.Exception (ErrorCall(ErrorCall), catch, throw)
 
 -- import           Control.Monad.Par       as P
 import Control.Arrow (first)
@@ -30,7 +32,9 @@ import Control.Monad.Par.Class as PC
 
 import Control.Monad.Par.IO as PIO
 
--- import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
+#ifdef DEBUG_SCHED
+import qualified Control.Monad.Par.Scheds.TraceDebuggable as TDB
+#endif
 import Control.Monad.State as S
 
 import Control.Concurrent.Chan
@@ -254,10 +258,10 @@ liftWithIndexS i f d =
       release ithOut $ toS localState'
       return (d', GlobalState gsIn gsOut)
 
-    moveState :: 
+    moveState ::
         forall ivar m a. (ParIVar ivar m, MonadIO m)
-      => a 
-      -> GlobalState ivar 
+      => a
+      -> GlobalState ivar
       -> m (GlobalState ivar)
     moveState token (GlobalState gsIn gsOut) = do
       let ithIn = gsIn !! i
@@ -265,11 +269,20 @@ liftWithIndexS i f d =
       localState <- getState ithIn
       (_, localState') <- return (d, localState) -- id
       release ithOut localState'
+      -- I'd love to be able to do something like this, but I can't catch exceptions here.
+      -- release ithOut localState'  `catch` \e@ErrorCall{} ->
+      --     if isMultiplePutErr e
+      --     then error $ "Double use of index " ++ show i ++ " detected"
+      --     else throw e
       return $ GlobalState gsIn gsOut
 
     idSf :: SFM s ()
     idSf = return ()
     {-# INLINE idSf #-}
+
+    -- This match is extracted from the `shed` function in
+    -- `Control.Monad.Par.Scheds.TraceInternal`
+    -- isMultiplePutErr (ErrorCall msg) = msg == "multiple put"
 
 {-# INLINE liftWithIndex' #-}
 liftWithIndex' ::
@@ -311,11 +324,16 @@ updateState = PC.put
 getState :: (ParFuture ivar m) => ivar s -> m s
 getState = PC.get -- will wait for the value
 
-runOhuaM :: (NFData a) => OhuaM a -> [S] -> IO (a, [S])
-runOhuaM comp initialState =
-  runParIO $
+runParComp =
+#ifdef DEBUG_SCHED
   -- for debugging the scheduler
-  -- TDB.runParIO $ do
+  TDB.runParIO
+#else
+  runParIO
+#endif
+
+runOhuaM :: (NFData a) => OhuaM a -> [S] -> IO (a, [S])
+runOhuaM comp initialState = runParComp $
    do
     inState <- mapM PC.newFull initialState
     outState <- forM initialState $ const PC.new

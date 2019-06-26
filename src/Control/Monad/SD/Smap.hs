@@ -33,54 +33,49 @@ smap ::
   -> [a]
   -> OhuaM [b]
 smap algo xs =
-  case xs
-        -- event thought the first case here indicates that this
-        -- function can handle empty lists it actually
-        -- can't. Something with the move state function is not
-        -- correct.
-        of
-    [] -> OhuaM moveState (fmap (([] :: [b]), ) . moveState) -- if no data was given then just move the state.
-    _ -> OhuaM moveState comp
+    case xs of
+        [] -> OhuaM moveState (fmap (([] :: [b]), ) . moveState) -- if no data was given then just move the state.
+        _ -> OhuaM moveState comp
     -- all we need to do is to move the state once, no need to do it for each
     -- of the elements in the array!
   where
     moveState ::
-         forall ivar m. (ParIVar ivar m, MonadIO m)
-      => GlobalState ivar
-      -> m (GlobalState ivar)
-    moveState = moveStateForward $ algo undefined
+           forall ivar m. (ParIVar ivar m, MonadIO m)
+        => GlobalState ivar
+        -> m (GlobalState ivar)
+    moveState = moveStateForward $ algo (error "I do not want to be touched!")
     comp ::
-         forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
-      => GlobalState ivar
-      -> m ([b], GlobalState ivar)
+           forall ivar m. (ParIVar ivar m, MonadIO m, NFData (ivar S))
+        => GlobalState ivar
+        -> m ([b], GlobalState ivar)
     comp (GlobalState gsIn gsOut) = do
-      futures <- smap' algo gsOut gsIn xs
-      results <- forM futures PC.get -- collect the results
-      let result = map fst results
-      return (result, GlobalState gsIn gsOut)
+        futures <- smap' algo gsOut gsIn xs
+        results <- forM futures PC.get -- collect the results
+        let result = map fst results
+        return (result, GlobalState gsIn gsOut)
     -- This function replicates the state as many times as their are values in
     -- the list and spawns the computation.
     smap' ::
-         (NFData b, Show a, ParIVar ivar m, MonadIO m, NFData (ivar S))
-      => (a -> OhuaM b)
-      -> [ivar S]
-      -> [ivar S]
-      -> [a]
-      -> m [ivar (b, GlobalState ivar)]
+           (NFData b, Show a, ParIVar ivar m, MonadIO m, NFData (ivar S))
+        => (a -> OhuaM b)
+        -> [ivar S]
+        -> [ivar S]
+        -> [a]
+        -> m [ivar (b, GlobalState ivar)]
     smap' f originalOut initialState = go initialState
       where
         newEmptyStateVec = sequence $ replicate stateVSize PC.new -- create the new output state
         stateVSize = length initialState
         go prevState l =
-          case l of
-            [] -> pure []
-            [y] -> pure <$> spawnComp y originalOut
-            (y:ys) -> do
-              stateVec <- newEmptyStateVec
-              (:) <$> spawnComp y stateVec <*> go stateVec ys
+            case l of
+                [] -> error "I should be unreachable"
+                [y] -> pure <$> spawnComp y originalOut
+                (y:ys) -> do
+                    stateVec <- newEmptyStateVec
+                    (:) <$> spawnComp y stateVec <*> go stateVec ys
           where
             spawnComp e stateVec =
-              PC.spawn $ runOhua (f e) $ GlobalState prevState stateVec
+                PC.spawn $ runOhua (f e) $ GlobalState prevState stateVec
 
 type AlgoRunner m ivar t result
      --(ParIVar ivar m, MonadIO m, MonadIO ivar) =>
@@ -95,7 +90,7 @@ type PipelineStrategy a b
                                    -> Generator IO a -> a -> m [ivar ( b
                                                                      , GlobalState ivar)]
 
--- Again like smap this cannot deal with empty generators. Furthermore
+-- TODO: Check if this can deal with empty generators. Furthermore
 -- it always advances the generator one position more than what it
 -- currently processes to find the end of the generator before the
 -- last item is processed so that it can spawn that computation with
