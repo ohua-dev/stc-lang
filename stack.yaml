@@ -47,9 +47,7 @@ packages:
 extra-deps: [hw-kafka-client-2.6.0, haskakafka-1.2.0]
 
 # Override default flag values for local packages and extra-deps
-flags:
-  statefulness:
-    debug-sched: true
+flags: {}
 
 # Extra package databases containing global packages
 extra-package-dbs: []

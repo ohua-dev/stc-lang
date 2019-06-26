@@ -13,3 +13,4 @@ cabal.config
 */*.csv
 */*.json
 /*.cabal
+/benchmarks/*.cabal
