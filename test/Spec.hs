@@ -3,13 +3,12 @@ import Test.Framework
 
 import SD.Correctness as FBM
 import DD.Correctness as SBM
--- import STMonadStateThreads as STM
 import SD.Performance as PFBM
 import DD.Performance as PSBFM
 import Data.Typeable
 import Monad.Generator
-import Control.Monad.DD.StreamsBasedExplicitAPI as API
-import Control.Monad.DD.StreamsBasedFreeMonad
+import Control.Monad.DD.IndexAPI as API
+import Control.Monad.DD
 import Test.Framework.Providers.HUnit
 import Test.HUnit hiding (Test)
 import Control.Monad.IO.Class

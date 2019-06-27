@@ -6,8 +6,8 @@ maintainer: sebastian.ertel@tu-dresden.de
 copyright: 2017-2019 Norman Rink, Sebastian Ertel, Justus Adam
 license: BSD3
 synopsis: A library for implicit, monadic dataflow parallelism
-homepage: https://github.com/ohua-dev/statefulness#readme
-git: https://bitbucket.org/nrink/statefulness
+homepage: https://github.com/ohua-dev/stc-lang#readme
+git: https://github.com/ohua-dev/stc-lang
 extra-source-files:
 - README.md
 ghc-options:
@@ -104,24 +104,11 @@ executables:
     - clock
     - vector
     - BoundedChan
-  statefulness-perf-exe:
-    main: Main.hs
-    source-dirs:
-    - test/common
-    - test/perf-exe
-    ghc-options:
-    - -threaded
-    - -eventlog
-    - -rtsopts
-    dependencies:
-    - stc-lang
-    - ghc-prim
 tests:
   statefulness-test:
     main: Spec.hs
     source-dirs:
-    - test/common
-    - test/unit
+    - test
     ghc-options:
     - -threaded
     - -rtsopts

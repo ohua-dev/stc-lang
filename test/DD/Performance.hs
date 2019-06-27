@@ -1,4 +1,11 @@
 {-# LANGUAGE RankNTypes, ExplicitForAll, OverloadedStrings #-}
+module DD.Performance where
+
+import Test.HUnit hiding (State)
+import Test.Framework
+import Test.Framework.Providers.HUnit
+
+import Control.Monad.State
 
 import FakeComputation
 
@@ -118,10 +125,17 @@ coresTest cores runner = mapM runTest cores
       -- heteroPipeTest runner
       -- TODO validation needed! (for now, check the exec times)
 
-main = do
-  -- _ <- coresTest [4] $ flip evalStateT (0::Int) -- use: +RTS -qm -RTS to avoid thread migration
-  -- _ <- coresTest [4] runChanM -- scales, but not as good as the above. don't use the -qm option!
-  _ <- coresTest [4] runParIO -- scales as good as the first option!
-  -- stats <- getRTSStats
-  -- putStrLn $ show stats
-  return ()
+validateResults :: [([Float], [Float])] -> Assertion
+validateResults = mapM_ $ uncurry $ assertEqual "wrong result"
+
+testSuite :: Test.Framework.Test
+testSuite =
+    testGroup
+        "Performance SBFM"
+        [
+          -- testCase "4-step pipeline with Chans" $ validateResults $ coresTest runChanM
+        -- ,
+          -- testCase "4-step pipeline with par" $ validateResults $ coresTest runParIO
+        -- ,
+          testCase "4-step pipeline with PinnedChans" $ validateResults =<< (coresTest [1..4] $ flip evalStateT (0::Int))
+        ]
