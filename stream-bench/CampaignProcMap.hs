@@ -1,12 +1,18 @@
 {-# LANGUAGE ConstraintKinds #-}
-module CampaignProcMap (Map, new, insert, mapM_) where
 
-import Prelude hiding (mapM_)
-import Data.Hashable (Hashable)
+module CampaignProcMap
+    ( Map
+    , new
+    , insert
+    , mapM_
+    ) where
+
 import Control.DeepSeq
-import qualified MutableSet as Set
-import qualified Data.HashTable.IO as MHT
 import Control.Monad.IO.Class
+import qualified Data.HashTable.IO as MHT
+import Data.Hashable (Hashable)
+import qualified MutableSet as Set
+import Prelude hiding (mapM_)
 
 type Constraint a = (Hashable a, Eq a)
 
@@ -24,10 +30,12 @@ instance NFData (Map k v) where
 new :: IO (Map k v)
 new = Map <$> MHT.new
 
-insert :: (Constraint k, Set.Constraint v, MonadIO m) => k -> v -> Map k v -> m ()
-insert k v m = liftIO $ do
-    set <- maybe Set.new pure =<< MHT.lookup (unwrap m) k
-    Set.insert v set
+insert ::
+       (Constraint k, Set.Constraint v, MonadIO m) => k -> v -> Map k v -> m ()
+insert k v m =
+    liftIO $ do
+        set <- maybe Set.new pure =<< MHT.lookup (unwrap m) k
+        Set.insert v set
 
 mapM_ :: MonadIO m => ((k, Set.Set v) -> IO a) -> Map k v -> m ()
 mapM_ f = liftIO . MHT.mapM_ f . unwrap

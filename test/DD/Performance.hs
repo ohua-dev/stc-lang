@@ -1,16 +1,17 @@
-{-# LANGUAGE RankNTypes, ExplicitForAll, OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module DD.Performance where
 
-import Test.HUnit hiding (State)
 import Test.Framework
 import Test.Framework.Providers.HUnit
+import Test.HUnit hiding (State)
 
 import Control.Monad.State
 
 import FakeComputation
 
-import Control.Monad.DD.IndexAPI
 import Control.Monad.DD
+import Control.Monad.DD.IndexAPI
 import Data.Dynamic2
 
 import Data.Time.Clock.POSIX
@@ -37,13 +38,13 @@ currentTimeMillis = round . (* 1000) <$> getPOSIXTime
 -- This does not show pipeline scalability because the RTS detects that we are essentially doing the same thing in every stage of the pipeline.
 -- It will create "black holes", i.e., it forces the last 3 stages to wait for the results of the first one then just reuses the result.
 pipe4 v = do
-  c <- return v
-  r0 <- liftWithIndexNamed 0 "perf/wrk-1" work c
-  r1 <- liftWithIndexNamed 1 "perf/wrk-2" (work . snd) r0
-  r2 <- liftWithIndexNamed 2 "perf/wrk-3" (work . snd) r1
-  r3 <- liftWithIndexNamed 3 "perf/wrk-4" (work . snd) r2
-  r <- liftWithIndex 4 snd' r3
-  return r
+    c <- return v
+    r0 <- liftWithIndexNamed 0 "perf/wrk-1" work c
+    r1 <- liftWithIndexNamed 1 "perf/wrk-2" (work . snd) r0
+    r2 <- liftWithIndexNamed 2 "perf/wrk-3" (work . snd) r1
+    r3 <- liftWithIndexNamed 3 "perf/wrk-4" (work . snd) r2
+    r <- liftWithIndex 4 snd' r3
+    return r
 
 -- Final analysis: Pipeline scalability here only shows when IO (state threads printing results) is involved.
 --                 Otherwise the RTS checks that we actually funnel the same data through and will not perform the computation multiple times!
@@ -55,12 +56,12 @@ fourStepPipeline = smap pipe4
 -- This shows that our pipeline parallelism works because every stage of the pipeline does a different operation and as such
 -- the RTS can not optimize anything by caching results.
 pipe3 v = do
-  c <- return v
-  r0 <- liftWithIndexNamed 0 "perf/wrk-sin" (gwork sin_iter) c
-  r1 <- liftWithIndexNamed 1 "perf/wrk-cos" ((gwork cos_iter) . snd) r0
-  r2 <- liftWithIndexNamed 2 "perf/wrk-tan" ((gwork tan_iter) . snd) r1
-  r <- liftWithIndex 3 snd' r2
-  return r
+    c <- return v
+    r0 <- liftWithIndexNamed 0 "perf/wrk-sin" (gwork sin_iter) c
+    r1 <- liftWithIndexNamed 1 "perf/wrk-cos" ((gwork cos_iter) . snd) r0
+    r2 <- liftWithIndexNamed 2 "perf/wrk-tan" ((gwork tan_iter) . snd) r1
+    r <- liftWithIndex 3 snd' r2
+    return r
 
 threeStepPipeline = smap pipe3
 
@@ -68,60 +69,60 @@ threeStepPipeline = smap pipe3
 --         Just changing the cabal file and running `stack test` won't work.
 --         Instead always do `stack clean && stack test`
 homoPipeTest ::
-     MonadStream m => (forall a. m a -> IO a) -> IO ([Float], [Float])
+       MonadStream m => (forall a. m a -> IO a) -> IO ([Float], [Float])
 homoPipeTest run = do
-  let a = 3000000 :: Float
-  let b = 20000000 :: Int
-  let dataCount = 10
-  let inputs = replicate dataCount a
+    let a = 3000000 :: Float
+    let b = 20000000 :: Int
+    let dataCount = 10
+    let inputs = replicate dataCount a
   -- let inputs = [3000000 :: Float, 300004,3000006,30000008]
-  let r = wrk_sins b a
-  let expectedOutputs = replicate dataCount r
-  putStrLn $ "num cores (RTS option): " ++ (show numCapabilities)
-  (\x -> putStrLn $ "num cores: " ++ show x) =<< getNumCapabilities
-  start <- currentTimeMillis
-  result <-
-    run $
-    runOhuaM (fourStepPipeline =<< sfConst' inputs) $
-    map toDyn [(0 :: Int, b), (1, b), (2, b), (3, b), undefined]
+    let r = wrk_sins b a
+    let expectedOutputs = replicate dataCount r
+    putStrLn $ "num cores (RTS option): " ++ (show numCapabilities)
+    (\x -> putStrLn $ "num cores: " ++ show x) =<< getNumCapabilities
+    start <- currentTimeMillis
+    result <-
+        run $
+        runOhuaM (fourStepPipeline =<< sfConst' inputs) $
+        map toDyn [(0 :: Int, b), (1, b), (2, b), (3, b), undefined]
   -- result <- run $ runOhuaM (fourStepPipeline =<< sfConst' inputs) $ map toDyn [(0::Int,340::Int),(1,334),(2,356),(3,306),undefined]
-  stop <- currentTimeMillis
-  putStrLn $ "Exec time [ms]: " ++ (show $ stop - start)
+    stop <- currentTimeMillis
+    putStrLn $ "Exec time [ms]: " ++ (show $ stop - start)
   -- assertEqual "result was wrong." expectedOutputs result
-  return (expectedOutputs, result)
+    return (expectedOutputs, result)
 
 heteroPipeTest ::
-     MonadStream m => (forall a. m a -> IO a) -> IO ([Float], [Float])
+       MonadStream m => (forall a. m a -> IO a) -> IO ([Float], [Float])
 heteroPipeTest run = do
-  let a = 3000000 :: Float
-  let b = 20000000 :: Int
-  let dataCount = 10
-  let inputs = replicate dataCount a
-  let r = wrk_sins b a
-  let expectedOutputs = replicate dataCount r
-  putStrLn $ "num cores (RTS option): " ++ (show numCapabilities)
-  (\x -> putStrLn $ "num cores: " ++ show x) =<< getNumCapabilities
-  start <- currentTimeMillis
-  result <-
-    run $
-    runOhuaM (threeStepPipeline =<< sfConst' inputs) $
-    map toDyn [(0 :: Int, b), (1, b), (2, b), undefined]
+    let a = 3000000 :: Float
+    let b = 20000000 :: Int
+    let dataCount = 10
+    let inputs = replicate dataCount a
+    let r = wrk_sins b a
+    let expectedOutputs = replicate dataCount r
+    putStrLn $ "num cores (RTS option): " ++ (show numCapabilities)
+    (\x -> putStrLn $ "num cores: " ++ show x) =<< getNumCapabilities
+    start <- currentTimeMillis
+    result <-
+        run $
+        runOhuaM (threeStepPipeline =<< sfConst' inputs) $
+        map toDyn [(0 :: Int, b), (1, b), (2, b), undefined]
   -- result <- run $ runOhuaM (fourStepPipeline =<< sfConst' inputs) $ map toDyn [(0::Int,340::Int),(1,334),(2,356),(3,306),undefined]
-  stop <- currentTimeMillis
-  putStrLn $ "Exec time [ms]: " ++ (show $ stop - start)
+    stop <- currentTimeMillis
+    putStrLn $ "Exec time [ms]: " ++ (show $ stop - start)
   -- assertEqual "result was wrong." expectedOutputs result
-  return (expectedOutputs, result)
+    return (expectedOutputs, result)
 
 coresTest ::
-     MonadStream m
-  => [Int]
-  -> (forall a. m a -> IO a)
-  -> IO [([Float], [Float])]
+       MonadStream m
+    => [Int]
+    -> (forall a. m a -> IO a)
+    -> IO [([Float], [Float])]
 coresTest cores runner = mapM runTest cores
   where
     runTest numCores = do
-      setNumCapabilities numCores
-      homoPipeTest runner
+        setNumCapabilities numCores
+        homoPipeTest runner
       -- heteroPipeTest runner
       -- TODO validation needed! (for now, check the exec times)
 
@@ -132,10 +133,10 @@ testSuite :: Test.Framework.Test
 testSuite =
     testGroup
         "Performance SBFM"
-        [
           -- testCase "4-step pipeline with Chans" $ validateResults $ coresTest runChanM
         -- ,
           -- testCase "4-step pipeline with par" $ validateResults $ coresTest runParIO
         -- ,
-          testCase "4-step pipeline with PinnedChans" $ validateResults =<< (coresTest [1..4] $ flip evalStateT (0::Int))
+        [ testCase "4-step pipeline with PinnedChans" $
+          validateResults =<< (coresTest [1 .. 4] $ flip evalStateT (0 :: Int))
         ]

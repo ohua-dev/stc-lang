@@ -17,11 +17,25 @@ dependencies:
 - base >=4.7 && <5
 - mtl
 - deepseq
-- parallel
 - microlens
 - transformers
-- rdtsc
-- time
+default-extensions:
+  - DeriveGeneric
+  - ExistentialQuantification
+  - ExplicitForAll
+  - FlexibleContexts
+  - FlexibleInstances
+  - ScopedTypeVariables
+  - TupleSections
+  - LambdaCase
+  - RankNTypes
+  - NamedFieldPuns
+  - MultiParamTypeClasses
+  - RecordWildCards
+  - TypeSynonymInstances
+  - BangPatterns
+  - DeriveFunctor
+  - RecordWildCards
 library:
   source-dirs: src
   ghc-options:
@@ -119,6 +133,7 @@ tests:
     - test-framework-hunit
     - HUnit
     - ghc-prim
+    - time
 flags:
   debug-sched:
     description: Enable the debuggable scheduler

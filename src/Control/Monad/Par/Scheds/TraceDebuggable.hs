@@ -1,34 +1,30 @@
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 {-# LANGUAGE RankNTypes, NamedFieldPuns, BangPatterns,
-             ExistentialQuantification, FlexibleContexts #-}
+  ExistentialQuantification, FlexibleContexts #-}
+
 module Control.Monad.Par.Scheds.TraceDebuggable where
 
+import Control.Concurrent hiding (yield)
+import Control.Exception
+import Control.Monad as M hiding (join, mapM, sequence)
+import Control.Monad.IO.Class
 import Control.Monad.Par
 import Control.Monad.Par.Scheds.TraceInternal
-import Control.Monad as M hiding (mapM, sequence, join)
-import Prelude hiding (mapM, sequence, head,tail)
 import Data.IORef
-import System.IO.Unsafe
-import Control.Concurrent hiding (yield)
-import GHC.Conc (numCapabilities,getNumCapabilities)
-import Control.DeepSeq
-import Control.Exception
-import System.IO
-import Control.Monad.IO.Class
+import GHC.Conc (numCapabilities)
 import GHC.Stack
+import Prelude hiding (head, mapM, sequence, tail)
+import System.IO
+import System.IO.Unsafe
 
 import Debug.Trace as T
-
 
 putErrLn :: String -> IO ()
 putErrLn = hPutStrLn stderr
 
-
 doesThisBlockIndefinitely :: HasCallStack => IO a -> IO a
 doesThisBlockIndefinitely ac =
-  ac `catch` \BlockedIndefinitelyOnMVar ->
-    error "here"
-
+    ac `catch` \BlockedIndefinitelyOnMVar -> error "here"
 
 {-# INLINE runPar_internal #-}
 runPar_internal :: Bool -> Par a -> IO a
@@ -80,7 +76,6 @@ runPar_internal _doSync x = do
         Full a -> return a
         _ -> error "no result"
 
-
 -- | Run a parallel, deterministic computation and return its result.
 --
 --   Note: you must NOT return an IVar in the output of the parallel
@@ -98,55 +93,57 @@ runPar = unsafePerformIO . runPar_internal True
 runParIO :: Par a -> IO a
 runParIO = runPar_internal True
 
-
 reschedule :: Sched -> IO ()
-reschedule queue@Sched{ workpool } = do
-  e <- atomicModifyIORef workpool $ \ts ->
-         case ts of
-           []      -> ([], Nothing)
-           (t:ts') -> (ts', Just t)
-  case e of
-    Nothing -> T.trace ("stealing something") $ steal queue
-    Just t  -> T.trace ("scheduling something") $ sched True queue t
-
+reschedule queue@Sched {workpool} = do
+    e <-
+        atomicModifyIORef workpool $ \ts ->
+            case ts of
+                [] -> ([], Nothing)
+                (t:ts') -> (ts', Just t)
+    case e of
+        Nothing -> T.trace ("stealing something") $ steal queue
+        Just t -> T.trace ("scheduling something") $ sched True queue t
 
 steal :: Sched -> IO ()
-steal q@Sched{ idle, scheds, no=my_no } = do
+steal q@Sched {idle, scheds, no = my_no}
   -- printf "cpu %d stealing\n" my_no
-  go scheds
+ = do
+    go scheds
   where
-    go [] = do m <- newEmptyMVar
-               r <- atomicModifyIORef idle $ \is -> (m:is, is)
-               if length r == numCapabilities - 1
+    go [] = do
+        m <- newEmptyMVar
+        r <- atomicModifyIORef idle $ \is -> (m : is, is)
+        if length r == numCapabilities - 1
                -- --> begin new sebastian
                -- if length r == (length scheds) - 1
                -- numCaps <- getNumCapabilities
                -- if length r == numCaps - 1
                -- <-- end new sebastian
-                  then do
                      -- printf "cpu %d initiating shutdown\n" my_no
-                     mapM_ (\m -> putMVar m True) r
-                  else do
-                    done <- takeMVar m
-                    if done
-                       then do
+            then do
+                mapM_ (\m -> putMVar m True) r
+            else do
+                done <- takeMVar m
+                if done
                          -- printf "cpu %d shutting down\n" my_no
-                         return ()
-                       else do
-                         -- printf "cpu %d woken up\n" my_no
-                         go scheds
+                    then do
+                        return ()
+                    else do
+                        go scheds
     go (x:xs)
-      | no x == my_no = go xs
-      | otherwise     = do
-         r <- atomicModifyIORef (workpool x) $ \ ts ->
-                 case ts of
-                    []     -> ([], Nothing)
-                    (x:xs) -> (xs, Just x)
-         case r of
-           Just t  -> do
+        | no x == my_no = go xs
+        | otherwise = do
+            r <-
+                atomicModifyIORef (workpool x) $ \ts ->
+                    case ts of
+                        [] -> ([], Nothing)
+                        (x:xs) -> (xs, Just x)
+            case r of
+                Just t
               -- printf "cpu %d got work from cpu %d\n" my_no (no x)
-              sched True q t
-           Nothing -> go xs
+                 -> do
+                    sched True q t
+                Nothing -> go xs
 
 instance MonadIO Par where
-  liftIO = Par . LiftIO
+    liftIO = Par . LiftIO

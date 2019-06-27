@@ -1,11 +1,20 @@
 {-# LANGUAGE ConstraintKinds #-}
-module MutableNFMap (Map, new, insert, delete, lookup, mapM_, size) where
 
-import Prelude hiding (mapM_, lookup)
-import qualified Data.HashTable.IO as MHT
+module MutableNFMap
+    ( Map
+    , new
+    , insert
+    , delete
+    , lookup
+    , mapM_
+    , size
+    ) where
+
 import Control.DeepSeq
 import Control.Monad.IO.Class
+import qualified Data.HashTable.IO as MHT
 import Data.Hashable (Hashable)
+import Prelude hiding (lookup, mapM_)
 
 type Constraint a = (Hashable a, Eq a)
 

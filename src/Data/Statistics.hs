@@ -1,4 +1,5 @@
-{-# LANGUAGE TemplateHaskell, TypeFamilies, DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell, TypeFamilies #-}
+
 module Data.Statistics
     ( OpCycle(..)
     , CycleStart
@@ -18,14 +19,14 @@ module Data.Statistics
     , toStat
     ) where
 
-import Data.Word
-import Data.Aeson.TH
-import Ohua.Types
-import Ohua.Serialize.JSON ()
-import Data.IORef
 import Control.Monad.IO.Class
+import Data.Aeson.TH
 import Data.Foldable
+import Data.IORef
+import Data.Word
 import GHC.Generics
+import Ohua.Serialize.JSON ()
+import Ohua.Types
 
 import qualified Data.Map.Strict as M
 
@@ -33,39 +34,55 @@ import qualified Foundation.Time.StopWatch as F
 import qualified Foundation.Time.Types as F
 
 data OpCycle = OpCycle
-  { readingState :: !Word64
-  , runningUserFunction :: !Word64
-  , writingState :: !Word64
-  , sendingResult :: !Word64
-  , totalCycleTime :: !Word64
-  } deriving (Generic)
+    { readingState :: !Word64
+    , runningUserFunction :: !Word64
+    , writingState :: !Word64
+    , sendingResult :: !Word64
+    , totalCycleTime :: !Word64
+    } deriving (Generic)
 
 deriveJSON defaultOptions ''OpCycle
 
-newtype WroteState = WroteState (IO OpCycle)
-newtype RanUserFunction = RanUserFunction (IO WroteState)
-newtype ReadState = ReadState (IO RanUserFunction)
-newtype CycleStart = CycleStart (IO ReadState)
+newtype WroteState =
+    WroteState (IO OpCycle)
+
+newtype RanUserFunction =
+    RanUserFunction (IO WroteState)
+
+newtype ReadState =
+    ReadState (IO RanUserFunction)
+
+newtype CycleStart =
+    CycleStart (IO ReadState)
 
 initCycle :: MonadIO m => m CycleStart
-initCycle = liftIO $ do
-  clock <- F.startPrecise
-  pure $ CycleStart $ do
-    F.NanoSeconds readState <- F.stopPrecise clock
-    pure $ ReadState $ do
-      F.NanoSeconds ranUF <- F.stopPrecise clock
-      pure $ RanUserFunction $ do
-        F.NanoSeconds wroteState <- F.stopPrecise clock
-        pure $ WroteState $ do
-          F.NanoSeconds sentResult <- F.stopPrecise clock
-          pure
-            OpCycle
-            { readingState = readState
-            , runningUserFunction = ranUF - readState
-            , writingState = wroteState - ranUF
-            , sendingResult = sentResult - wroteState
-            , totalCycleTime = sentResult
-            }
+initCycle =
+    liftIO $ do
+        clock <- F.startPrecise
+        pure $
+            CycleStart $ do
+                F.NanoSeconds readState <- F.stopPrecise clock
+                pure $
+                    ReadState $ do
+                        F.NanoSeconds ranUF <- F.stopPrecise clock
+                        pure $
+                            RanUserFunction $ do
+                                F.NanoSeconds wroteState <- F.stopPrecise clock
+                                pure $
+                                    WroteState $ do
+                                        F.NanoSeconds sentResult <-
+                                            F.stopPrecise clock
+                                        pure
+                                            OpCycle
+                                                { readingState = readState
+                                                , runningUserFunction =
+                                                      ranUF - readState
+                                                , writingState =
+                                                      wroteState - ranUF
+                                                , sendingResult =
+                                                      sentResult - wroteState
+                                                , totalCycleTime = sentResult
+                                                }
 
 initNoOpCycle :: MonadIO m => m CycleStart
 initNoOpCycle =
@@ -77,41 +94,46 @@ initNoOpCycle =
     pure $ RanUserFunction $ pure $ WroteState $ pure $ OpCycle 0 0 0 0 0
 
 type family Next stage where
-  Next CycleStart = ReadState
-  Next ReadState = RanUserFunction
-  Next RanUserFunction = WroteState
-  Next WroteState = OpCycle
+    Next CycleStart = ReadState
+    Next ReadState = RanUserFunction
+    Next RanUserFunction = WroteState
+    Next WroteState = OpCycle
 
 class CycleMark stage where
-  markIO :: stage -> IO (Next stage)
+    markIO :: stage -> IO (Next stage)
 
 instance CycleMark CycleStart where
-  markIO (CycleStart a) = a
+    markIO (CycleStart a) = a
+
 instance CycleMark ReadState where
-  markIO (ReadState a) = a
+    markIO (ReadState a) = a
+
 instance CycleMark RanUserFunction where
-  markIO (RanUserFunction a) = a
+    markIO (RanUserFunction a) = a
+
 instance CycleMark WroteState where
-  markIO (WroteState a) = a
+    markIO (WroteState a) = a
 
 mark :: (CycleMark mark, MonadIO m) => mark -> m (Next mark)
 mark = liftIO . markIO
 
-newtype StatCollector = StatCollector (IORef [(QualifiedBinding, OpCycle)])
+newtype StatCollector =
+    StatCollector (IORef [(QualifiedBinding, OpCycle)])
 
 initStatCollection :: MonadIO m => m StatCollector
 initStatCollection = liftIO $ StatCollector <$> newIORef mempty
 
 recordCycle :: MonadIO m => StatCollector -> QualifiedBinding -> OpCycle -> m ()
-recordCycle (StatCollector r) b cy = liftIO $ atomicModifyIORef' r $ \l -> ((b, cy):l,())
+recordCycle (StatCollector r) b cy =
+    liftIO $ atomicModifyIORef' r $ \l -> ((b, cy) : l, ())
 
 data OpStat = OpStat
-  { operatorName :: QualifiedBinding
-  , runs :: [OpCycle]
-  , totalRuns :: Int
-  , totalRuntime :: Integer
-  , avgRun :: OpCycle
-  } deriving Generic
+    { operatorName :: QualifiedBinding
+    , runs :: [OpCycle]
+    , totalRuns :: Int
+    , totalRuntime :: Integer
+    , avgRun :: OpCycle
+    } deriving (Generic)
 
 deriveJSON defaultOptions ''OpStat
 

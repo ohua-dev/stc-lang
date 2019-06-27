@@ -1,4 +1,5 @@
-{-# language ConstraintKinds #-}
+{-# LANGUAGE ConstraintKinds #-}
+
 module MutableSet
     ( Set
     , Constraint
@@ -11,15 +12,19 @@ module MutableSet
     , toList
     ) where
 
-import Prelude hiding (mapM_)
+import Control.DeepSeq
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.HashTable.IO as HT
 import Data.Hashable (Hashable)
-import Control.DeepSeq
 import Data.Maybe (isJust)
-import Control.Monad.IO.Class (MonadIO, liftIO)
+import Prelude hiding (mapM_)
 
 type HashSetInner a = HT.BasicHashTable a ()
-newtype Set a = Set { unwrap :: HashSetInner a }
+
+newtype Set a = Set
+    { unwrap :: HashSetInner a
+    }
+
 type Constraint a = (Hashable a, Eq a)
 
 new :: MonadIO m => m (Set a)

@@ -2,24 +2,26 @@ name:                benchmarks
 version:             0.1.0.0
 dependencies:
   - base >= 4.7 && < 5
+  - criterion
+  - vector
+library:
+  source-dirs: src # This folder is for shared modules
+  dependencies:
   - monad-par
   - stc-lang
-  - criterion
-  - statistics
-  - aeson
-  - bytestring
-  - process
-  - vector
-  - hashmap
   - deepseq
   - mtl
   - time
   - monad-par-extras
   - parallel
   - array
-library:
-  source-dirs: src # This folder is for shared modules
 
 executables:
   benchmarks:
     main: src/bench_runner.hs
+    dependencies:
+      - statistics
+      - aeson
+      - bytestring
+      - process
+      - hashmap

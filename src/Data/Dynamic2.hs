@@ -1,9 +1,5 @@
-{-# LANGUAGE ExplicitForAll      #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving  #-}
-{-# LANGUAGE Trustworthy         #-}
-
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE CPP #-}
 
 -----------------------------------------------------------------------------
@@ -24,46 +20,36 @@
 -- (monomorphic) type.
 --
 -----------------------------------------------------------------------------
-
 module Data.Dynamic2
-  (
-
         -- Module Data.Typeable re-exported for convenience
-        module Data.Typeable,
-
+    ( module Data.Typeable
         -- * The @Dynamic@ type
-        Dynamic(..),        -- abstract, instance of: Show, Typeable
-
+    , Dynamic(..) -- abstract, instance of: Show, Typeable
         -- * Converting to and from @Dynamic@
-        toDyn,
-        fromDyn,
-        fromDynamic,
-
+    , toDyn
+    , fromDyn
+    , fromDynamic
         -- * Applying functions of dynamic type
-        dynApply,
-        dynApp,
-        dynTypeRep,
+    , dynApply
+    , dynApp
+    , dynTypeRep
+    , forceDynamic
+    , TypeCastException(..)
+    ) where
 
-        forceDynamic,
-        TypeCastException(..)
+import Data.Maybe
+import Data.Typeable
+import Unsafe.Coerce
 
-  ) where
-
-
-import           Data.Maybe
-import           Data.Typeable
-import           Unsafe.Coerce
-
-import           GHC.Base
-import           GHC.Exception
-import           GHC.Show
+import GHC.Base
+import GHC.Exception
+import GHC.Show
 
 -------------------------------------------------------------
 --
 --              The type Dynamic
 --
 -------------------------------------------------------------
-
 {-|
   A value of type 'Dynamic' is an object encapsulated together with its type.
 
@@ -74,14 +60,15 @@ import           GHC.Show
   'Show'ing a value of type 'Dynamic' returns a pretty-printed representation
   of the object\'s type; useful for debugging.
 -}
-data Dynamic = Dynamic TypeRep Obj
+data Dynamic =
+    Dynamic TypeRep
+            Obj
 
-instance Show Dynamic where
+instance Show Dynamic
    -- the instance just prints the type representation.
-   showsPrec _ (Dynamic t _) =
-          showString "<<" .
-          showsPrec 0 t   .
-          showString ">>"
+                                                        where
+    showsPrec _ (Dynamic t _) =
+        showString "<<" . showsPrec 0 t . showString ">>"
 
 -- here so that it isn't an orphan:
 instance Exception Dynamic
@@ -109,67 +96,72 @@ toDyn v = Dynamic (typeOf v) (unsafeCoerce v)
 
 -- | Converts a 'Dynamic' object back into an ordinary Haskell value of
 -- the correct type.  See also 'fromDynamic'.
-fromDyn :: Typeable a
-        => Dynamic      -- ^ the dynamically-typed object
-        -> a            -- ^ a default value
-        -> a            -- ^ returns: the value of the first argument, if
+fromDyn ::
+       Typeable a
+    => Dynamic -- ^ the dynamically-typed object
+    -> a -- ^ a default value
+    -> a -- ^ returns: the value of the first argument, if
                         -- it has the correct type, otherwise the value of
                         -- the second argument.
 fromDyn (Dynamic t v) def
-  | typeOf def == t = unsafeCoerce v
-  | otherwise       = def
+    | typeOf def == t = unsafeCoerce v
+    | otherwise = def
 
 -- | Converts a 'Dynamic' object back into an ordinary Haskell value of
 -- the correct type.  See also 'fromDyn'.
-fromDynamic
-        :: Typeable a
-        => Dynamic      -- ^ the dynamically-typed object
-        -> Maybe a      -- ^ returns: @'Just' a@, if the dynamically-typed
+fromDynamic ::
+       Typeable a
+    => Dynamic -- ^ the dynamically-typed object
+    -> Maybe a -- ^ returns: @'Just' a@, if the dynamically-typed
                         -- object has the correct type (and @a@ is its value),
                         -- or 'Nothing' otherwise.
 fromDynamic (Dynamic t v) =
-  case unsafeCoerce v of
-    r | t == typeOf r -> Just r
-      | otherwise     -> Nothing
+    case unsafeCoerce v of
+        r
+            | t == typeOf r -> Just r
+            | otherwise -> Nothing
 
 -- (f::(a->b)) `dynApply` (x::a) = (f a)::b
 dynApply :: Dynamic -> Dynamic -> Maybe Dynamic
 dynApply (Dynamic t1 f) (Dynamic t2 x) =
-  case funResultTy t1 t2 of
-    Just t3 -> Just (Dynamic t3 ((unsafeCoerce f) x))
-    Nothing -> Nothing
+    case funResultTy t1 t2 of
+        Just t3 -> Just (Dynamic t3 ((unsafeCoerce f) x))
+        Nothing -> Nothing
 
 dynApp :: Dynamic -> Dynamic -> Dynamic
-dynApp f x = case dynApply f x of
-             Just r -> r
-             Nothing -> errorWithoutStackTrace ("Type error in dynamic application.\n" ++
-                               "Can't apply function " ++ show f ++
-                               " to argument " ++ show x)
-
+dynApp f x =
+    case dynApply f x of
+        Just r -> r
+        Nothing ->
+            errorWithoutStackTrace
+                ("Type error in dynamic application.\n" ++
+                 "Can't apply function " ++ show f ++ " to argument " ++ show x)
 #if !MIN_VERSION_base(4,9,0)
 errorWithoutStackTrace = error
 #endif
-
 dynTypeRep :: Dynamic -> TypeRep
 dynTypeRep (Dynamic tr _) = tr
 
-
-
-
-data TypeCastException = TypeCastException TypeRep TypeRep
-  deriving Typeable
+data TypeCastException =
+    TypeCastException TypeRep
+                      TypeRep
+    deriving (Typeable)
 
 instance Show TypeCastException where
-  show (TypeCastException expected recieved) =
-    "TypeCastexception: Expected " ++ show expected ++ " got " ++ show recieved
+    show (TypeCastException expected recieved) =
+        "TypeCastexception: Expected " ++
+        show expected ++ " got " ++ show recieved
 
 instance Exception TypeCastException
 
-
 -- | Coerce a dynamic to a value.
 -- If the expected type is not the one inside the 'Dynamic' it throws an error showing both types.
-forceDynamic :: forall a . Typeable a => Dynamic -> a
+forceDynamic ::
+       forall a. Typeable a
+    => Dynamic
+    -> a
 forceDynamic dyn
-  | Just a <- fromDynamic dyn = a
-  | otherwise = throw $ TypeCastException rep (dynTypeRep dyn)
-  where rep = typeRep (Proxy :: Proxy a)
+    | Just a <- fromDynamic dyn = a
+    | otherwise = throw $ TypeCastException rep (dynTypeRep dyn)
+  where
+    rep = typeRep (Proxy :: Proxy a)

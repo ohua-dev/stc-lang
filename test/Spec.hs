@@ -24,11 +24,7 @@ import Control.Monad.Stream.Par
 main :: IO ()
 main =
     defaultMain
-        -- [PFBM.testSuite]
-        --[PSBFM.testSuite]
-        [FBM.testSuite]
-        -- [STM.testSuite]
-        -- [FBM.testSuite, SBM.testSuite, basicRuntimeTests, STM.testSuite]
+        [FBM.testSuite, SBM.testSuite, basicRuntimeTests]
 -- main = flip defaultMainWithOpts mempty FBM.testSuite
 
 simpleLift :: (Typeable a, Typeable b) => (a -> b) -> Var a -> ASTM s (Var b)

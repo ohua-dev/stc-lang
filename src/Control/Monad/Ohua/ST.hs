@@ -7,33 +7,31 @@
 module Control.Monad.Ohua.ST where
 
 import System.IO.Unsafe (unsafePerformIO)
+
 -- import Control.Monad.ST.Unsafe (unsafeSTToIO)
-
 -- import Control.Monad.Reader (runReaderT, ReaderT)
-import Control.Monad
-import Control.Applicative
-
 import Control.Monad.ST
 
 -- import Data.Ohua.STRef (STRef)
 -- import Data.IORef
-
 -- data SafetyToken state s = SafetyToken state
-
 -- data SafetyToken state s a b = SafetyToken {
 --     cont :: a -> (b, SafetyToken state s a b)
 --   }
-
 -- newtype ST s a = ST (STRep s a)
 -- type STRep s a = forall state.SafetyToken state s -> IO (SafetyToken state s, a)
 --
-newtype ST1 s a = ST1 {
-  runST1 :: IO a
-} deriving (Functor, Applicative, Monad)
+newtype ST1 s a = ST1
+    { runST1 :: IO a
+    } deriving (Functor, Applicative, Monad)
 
-data InitSF1 s a b = forall state. InitSF1 (ST1 s state) (state -> a -> ST1 s b)
+data InitSF1 s a b =
+    forall state. InitSF1 (ST1 s state)
+                          (state -> a -> ST1 s b)
 
-data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
+data InitSF s a b =
+    forall state. InitSF (ST s state)
+                         (state -> a -> ST s b)
 
 -- instance Functor (ST s) where
 --     fmap f (ST m) = ST $ \ s -> do
@@ -57,7 +55,6 @@ data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
 --                             ( new_s, r ) <- m s
 --                             let (ST k2) = k r
 --                             k2 new_s
-
 -- instance Functor (ST s) where
 --     fmap f (ST m) = ST $ \ s ->
 --       case (m s) of { (new_s, r ) ->
@@ -81,7 +78,6 @@ data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
 --         case (m s) of { ( new_s, r ) ->
 --         case (k r) of { ST k2 ->
 --         (k2 new_s) }})
-
 -- unsafeRunST :: ST s a -> state -> a
 -- unsafeRunST (ST comp) = snd . unsafePerformIO . comp . SafetyToken
 --
@@ -98,7 +94,6 @@ data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
 -- newtype Cont a b = Cont {
 --   run :: a -> (b, Cont a b)
 -- }
-
 -- FIXME it is not possible to keep something safe via the type-level and still have the caller specify its type.
 --       note carefully how the ST monad does it: the type of the state in an ST monad is never really stated anywhere.
 --       it is created implicitly via the calls to newSTRef etc.
@@ -117,8 +112,6 @@ data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
 --           -- result = unsafeRunST comp' -- need to enforce encapsulation on my own
 --       in
 --         (result, Cont $ f state')
-
-
 -- • Couldn't match type ‘state’ with ‘STRef s Integer’
 --       ‘state’ is a rigid type variable bound by
 --         a type expected by the context:
@@ -133,18 +126,22 @@ data InitSF s a b = forall state. InitSF (ST s state) (state -> a -> ST s b)
 --    |
 -- 30 |   let stateThread = makeST (prepare, mySimpleStateThread)
 --    |                             ^^^^^^^
-makeST0 :: forall a b.(forall s state.(ST1 s state, state -> a -> ST1 s b)) -> a -> b
-makeST0 (initialState, stateThread) = unsafePerformIO $ do
-  state <- runST1 initialState
-  return $ \ a -> unsafePerformIO $ runST1 $ stateThread state a
+makeST0 ::
+       forall a b.
+       (forall s state. (ST1 s state, state -> a -> ST1 s b))
+    -> a
+    -> b
+makeST0 (initialState, stateThread) =
+    unsafePerformIO $ do
+        state <- runST1 initialState
+        return $ \a -> unsafePerformIO $ runST1 $ stateThread state a
+
 -- does not seem to work because we want to say that the type of 'state' depends
 -- on the type subsituted in the 'state'  type variable in 'ST1 s state'.
-
 -- Prelude> newtype ST1 s a = ST1 (IO a)
 -- Prelude> data InitSF1 s a b = forall state. InitSF1 (ST1 s state) (state -> a -> ST1 s b)
 -- Prelude> :t InitSF1
 -- InitSF1 :: ST1 s state -> (state -> a -> ST1 s b) -> InitSF1 s a b
-
 -- the point is that (,) is no capable of stating that the two 'state' type variables
 -- actually refer to the same type. that is because the type is:
 -- (,) :: a -> b -> (a,b)
@@ -158,13 +155,12 @@ makeST0 (initialState, stateThread) = unsafePerformIO $ do
 -- However, the existential still allows to express that the 'state' is the same for
 -- the data type and the function. It hides this state aspect on the type system level wherever InitSF is being used.
 -- Really cool!
-
 -- works
-makeST1 :: forall a b.(forall s.InitSF1 s a b) -> a -> b
-makeST1 (InitSF1 initialState stateThread) = unsafePerformIO $ do
-  state <- runST1 initialState
-  return $ \ a -> unsafePerformIO $ runST1 $ stateThread state a
-
+makeST1 :: forall a b. (forall s. InitSF1 s a b) -> a -> b
+makeST1 (InitSF1 initialState stateThread) =
+    unsafePerformIO $ do
+        state <- runST1 initialState
+        return $ \a -> unsafePerformIO $ runST1 $ stateThread state a
 -- TODO
 -- runStateThread :: (forall t. (InitSF1 t a b, Tagged t [a])) -> [b]
 -- runStateThread (InitSF1 initialState stateThread) =
@@ -180,8 +176,6 @@ makeST1 (InitSF1 initialState stateThread) = unsafePerformIO $ do
 -- makeST (InitSF initialState stateThread) = runST $ do
 --   ist <- initialState
 --   return $ Cont $ stateThread ist
-
-
   -- Cont $ f $ unsafeRunST'' initialState undefined
   -- where
   --   -- f :: state -> a -> (b, Cont a b)
@@ -193,15 +187,11 @@ makeST1 (InitSF1 initialState stateThread) = unsafePerformIO $ do
   --         -- result = unsafeRunST comp' -- need to enforce encapsulation on my own
   --     in
   --       (result, Cont $ f state')
-
 -- unsafeRunST :: ST s a -> a
 -- unsafeRunST = unsafePerformIO . unsafeSTToIO
-
 -- early notes:
-
 -- approach: make the call to create the state unsafe and then keep the
 -- state reference to perform only safe calls.
-
 -- note that the "s" in ST s a is just type-level trickery:
 -- data STRef s a = STRef (MutVar# s a)
 -- newtype ST s a = ST (STRep s a)
