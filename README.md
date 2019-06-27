@@ -1,16 +1,10 @@
-# STCLang: A library for implicit, monadic dataflow parallelism
+# STCLang: A library for implicit monadic dataflow parallelism
 
 STCLang is a library that enables stateful, implicit, monadic parallel
 computation in Haskell. The core ideas come from the
 [ohua](https://ohua-dev.github.io) project.
 
 We also [published](#publication) the theory and concepts behind this library.
-
-Currently, the `DD` version does not work with the development setup (GHC 8.2.2)
-of the project. This is due to problems with type resolution. It is therefore
-necessary to change the GHC version if the streams-based version is used in
-other code!
-
 
 ## Publication
 
