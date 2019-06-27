@@ -43,8 +43,6 @@ library:
   - -fno-cse
   exposed-modules:
   - Control.Monad.SD
-  - Control.Monad.DD
-  - Control.Monad.DD.IndexAPI
   - Control.Monad.Ohua.ST
   - Data.Ohua.STRef
   - Data.Dynamic2
