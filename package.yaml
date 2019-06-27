@@ -1,0 +1,139 @@
+name: stc-lang
+version: '1.0.0'
+category: Concurrency, Development
+author: Norman Rink, Sebastian Ertel, Justus Adam
+maintainer: sebastian.ertel@tu-dresden.de
+copyright: 2017-2019 Norman Rink, Sebastian Ertel, Justus Adam
+license: BSD3
+synopsis: A library for implicit, monadic dataflow parallelism
+homepage: https://github.com/ohua-dev/statefulness#readme
+git: https://bitbucket.org/nrink/statefulness
+extra-source-files:
+- README.md
+ghc-options:
+- -Wall
+- -O2
+dependencies:
+- base >=4.7 && <5
+- mtl
+- deepseq
+- parallel
+- microlens
+- transformers
+- rdtsc
+- time
+library:
+  source-dirs: src
+  ghc-options:
+  - -fPIC
+  - -fno-cse
+  exposed-modules:
+  - Control.Monad.SD
+  - Control.Monad.DD
+  - Control.Monad.DD.IndexAPI
+  - Control.Monad.Ohua.ST
+  - Data.Ohua.STRef
+  - Data.Dynamic2
+  - Data.StateElement
+  - Type.Magic
+  - Monad.Generator
+  - Control.Monad.Stream
+  - Control.Monad.Stream.Chan
+  - Control.Monad.Stream.Par
+  - Control.Monad.Stream.PinnedChan
+  - Data.Statistics
+  other-modules:
+  - Control.Monad.SD.Case
+  - Control.Monad.SD.Combinator
+  - Control.Monad.SD.FRP
+  - Control.Monad.SD.Ohua
+  - Control.Monad.SD.STCLang
+  - Control.Monad.SD.Smap
+  dependencies:
+  - monad-par
+  - monad-par-extras
+  - containers
+  - abstract-par
+  - free
+  - async
+  - microlens-mtl
+  - ohua-core
+  - data-default-class
+  - OneTuple
+  - vector
+  - monad-loops
+  - stm
+  - natural-transformation
+  - split
+  - bytestring
+  - abstract-par
+  - aeson
+  - bytestring
+  - foundation
+  - protolude
+  - BoundedChan
+  when:
+  - condition: flag(debug-sched)
+    cpp-options: -DDEBUG_SCHED
+  - condition: impl(ghc >= 8.0.0)
+    then:
+      other-modules: [Type.Magic.GHC8]
+    else:
+      other-modules: [Type.Magic.OldGHC]
+executables:
+  ohua-stream-bench:
+    main: algo.hs
+    source-dirs: stream-bench
+    ghc-options:
+    - -threaded
+    - -with-rtsopts=-N
+    dependencies:
+    - stc-lang
+    - hashtables
+    - text
+    - hashable
+    - aeson
+    - bytestring
+    - hedis
+    - uuid-types
+    - random
+    - hw-kafka-client
+    - microlens-aeson
+    - yaml
+    - random
+    - clock
+    - vector
+    - BoundedChan
+  statefulness-perf-exe:
+    main: Main.hs
+    source-dirs:
+    - test/common
+    - test/perf-exe
+    ghc-options:
+    - -threaded
+    - -eventlog
+    - -rtsopts
+    dependencies:
+    - stc-lang
+    - ghc-prim
+tests:
+  statefulness-test:
+    main: Spec.hs
+    source-dirs:
+    - test/common
+    - test/unit
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N4
+    dependencies:
+    - stc-lang
+    - test-framework
+    - test-framework-hunit
+    - HUnit
+    - ghc-prim
+flags:
+  debug-sched:
+    description: Enable the debuggable scheduler
+    manual: true
+    default: false
