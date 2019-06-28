@@ -4,6 +4,15 @@ STCLang is a library that enables stateful, implicit, monadic parallel
 computation in Haskell. The core ideas come from the
 [ohua](https://ohua-dev.github.io) project.
 
+STCLang lets you create parallel dataflows with stateful nodes without having to
+explicitly wire complex graph structures. Instead the program is written with an
+embedded, monadic DSL and automatically transformed into a graph and executed in
+parallel.
+
+On top of the base abstraction we have also built an FRP (functional reactive
+programming) interface. This allows you to run reactive programs on sequential
+streams of values and leverage pipeline parallelism to peed up computation.
+
 We also [published](#publication) the theory and concepts behind this library.
 
 ## Publication
