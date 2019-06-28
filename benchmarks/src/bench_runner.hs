@@ -79,7 +79,7 @@ setUpExperiment = do
 experiments =
     [ ("ohua-bench", ["sequential", "pure", "reading", "writing"])
     , ("comp-bench", ["sequential", "ohua", "par1", "par2"])
-    , ("app-bench", ["sequential", "ohua", "par"])
+    , ("app-bench", ["sequential", "ohua", "par", "ohua-noinline", "par-noinline"])
     , ("cond-bench", ["sequential", "ohua", "par"])
     , ("matmult-bench", ["sequential", "ohua", "par"])
     , ("bs-bench", ["sequential", "ohua", "par"])

@@ -80,6 +80,16 @@ appOhua g coll =
     f = liftWithIndex 0 g
     h = liftWithIndex 1 g
 
+appOhuaNoIn g coll =
+    runOhuaM
+        (smap (\x -> (,) <$> f x <*> h x) coll)
+        [toS (4.0 :: Float), toS (3.0 :: Float)]
+  where
+    {-# NOINLINE f #-}
+    {-# NOINLINE h #-}
+    f = liftWithIndex 0 g
+    h = liftWithIndex 1 g
+
 caseComp branch1 branch2 x = do
     c <- pure $ condition x
     o <- case_ c [(0, branch1 x), (1, branch2 x)]
@@ -105,6 +115,13 @@ compPar2 g coll = runPar $ (parMap $ g . g) coll
 -- appPar g coll = runPar $ (,) <$> parMap g coll <*> parMap g coll
 -- appPar :: (a -> a) -> [a] -> [(a, a)]
 appPar g coll = runPar $ parMapM (\x -> (,) <$> pure (g x) <*> pure (g x)) coll
+
+appParNoIn g coll = runPar $ parMapM (\x -> (,) <$> f x <*> h x) coll
+   where
+     {-# NOINLINE f #-}
+     {-# NOINLINE h #-}
+     f x = pure (g x)
+     h x = pure (g x)
 
 {-# INLINE condPar #-}
 condPar g coll =
@@ -148,6 +165,8 @@ appBenchmark =
         [ bench "sequential" (nf (map app) testData)
         , bench "ohua" (nfIO $ appOhua expensiveComputation testData)
         , bench "par" (nf (appPar $ sin_iter work) testData)
+        , bench "ohua-noinline" (nfIO $ appOhuaNoIn expensiveComputation testData)
+        , bench "par-noinline" (nf (appParNoIn $ sin_iter work) testData)
         ]
 
 condBenchmark =
