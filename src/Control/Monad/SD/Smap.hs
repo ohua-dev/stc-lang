@@ -7,11 +7,11 @@ module Control.Monad.SD.Smap
     ) where
 
 import Control.Monad
+import Control.Monad.Generator
 import Control.Monad.IO.Class
 import Control.Monad.Par.Class as PC
 import Control.Monad.SD.Ohua
 import Data.StateElement
-import Monad.Generator
 
 -- FIXME this should be based on smapGen!
 -- this spawns the computations for the elements but integrates the

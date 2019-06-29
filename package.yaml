@@ -48,7 +48,7 @@ library:
   - Data.Dynamic2
   - Data.StateElement
   - Type.Magic
-  - Monad.Generator
+  - Control.Monad.Generator
   - Control.Monad.Stream
   - Control.Monad.Stream.Chan
   - Control.Monad.Stream.Par

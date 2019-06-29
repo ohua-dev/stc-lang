@@ -5,7 +5,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE CPP #-}
 
-module Monad.Generator
+module Control.Monad.Generator
     ( IsGenerator(..)
     , liftIO
     , foldlGenerator

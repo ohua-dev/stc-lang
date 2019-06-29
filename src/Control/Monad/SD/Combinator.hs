@@ -1,6 +1,7 @@
 module Control.Monad.SD.Combinator where
 
 import Control.Monad
+import Control.Monad.Generator
 import Control.Monad.Par.Class as PC
 import Control.Monad.Par.Combinator (InclusiveRange, InclusiveRange(..))
 import Control.Monad.SD.Ohua
@@ -8,7 +9,6 @@ import Control.Monad.SD.STCLang
 import Control.Monad.SD.Smap
 import Data.Dynamic2
 import Data.StateElement
-import Monad.Generator
 
 import Control.Monad.State as S
 import Data.List as List

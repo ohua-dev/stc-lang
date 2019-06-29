@@ -20,6 +20,7 @@ import Control.Monad
     , void
     , when
     )
+import Control.Monad.Generator (Generator, foldlGeneratorT, ioReaderToGenerator)
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.List (ListT(ListT), runListT)
 import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
@@ -64,7 +65,6 @@ import GHC.Exts (IsList, Item)
 import GHC.Generics (Generic)
 import Lens.Micro
 import Lens.Micro.Aeson
-import Monad.Generator (Generator, foldlGeneratorT, ioReaderToGenerator)
 import qualified MutableNFMap as NFMap
 import qualified MutableSet as Set
 import Prelude hiding (String, show)
