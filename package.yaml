@@ -43,8 +43,6 @@ library:
   - -fno-cse
   exposed-modules:
   - Control.Monad.SD
-  - Control.Monad.Ohua.ST
-  - Data.Ohua.STRef
   - Data.Dynamic2
   - Data.StateElement
   - Type.Magic
