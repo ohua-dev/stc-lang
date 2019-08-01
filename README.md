@@ -1,4 +1,4 @@
-# STCLang: A library for implicit monadic dataflow parallelism
+# <img src="https://raw.githubusercontent.com/ohua-dev/ohua-dev.github.io/master/logos/fileIcons/iconCompact/haskell/export_compact.png" width="40px"/> STCLang: A library for implicit monadic dataflow parallelism
 
 [![Build Status](https://travis-ci.org/ohua-dev/stc-lang.svg?branch=master)](https://travis-ci.org/ohua-dev/stc-lang)
 [![Hackage](https://img.shields.io/hackage/v/stc-lang)](https://hackage.haskell.org/package/stc-lang)
