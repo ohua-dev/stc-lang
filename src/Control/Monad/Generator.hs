@@ -21,6 +21,8 @@ module Control.Monad.Generator
     , listGenerator
     , stateToGenerator
     , Generator
+    -- ** A mutable IO generator variable
+    , GenVar, newGenVar, pull
     ) where
 
 import Control.Applicative
@@ -29,11 +31,13 @@ import Control.Concurrent.Chan
 import Control.Concurrent.MVar
 import Control.DeepSeq
 import Control.Monad.State
-import Control.Natural
-import qualified Data.Foldable as F
 import Data.Foldable (foldr')
 import Data.Tuple
 import qualified GHC.Exts (IsList(..))
+
+
+-- | A natural transformation
+type f ~> g = forall x. f x -> g x
 
 ------------------------------------------------------------------
 --
@@ -137,7 +141,7 @@ foldlGeneratorT_ trans f = foldlGeneratorT trans (\() a -> f a) ()
 foldlGenerator_ :: (IsGenerator g m, Monad m) => (a -> m ()) -> g a -> m ()
 foldlGenerator_ = foldlGeneratorT_ id
 
-ioReaderToGenerator :: (IsGenerator g m, Monad g) => (m (Maybe a)) -> g a
+ioReaderToGenerator :: (IsGenerator g m, Monad g) => m (Maybe a) -> g a
 ioReaderToGenerator reader = recur
   where
     recur = maybe finish (`yield` recur) =<< needM reader
@@ -182,8 +186,8 @@ stateToGenerator st s = do
 -- One fun thing we can do in IO is put the generator in a mutable variable and then just pull values from that.
 type GenVar a = MVar (Generator IO a)
 
-mkGenIO :: Generator IO a -> IO (GenVar a)
-mkGenIO = newMVar
+newGenVar :: Generator IO a -> IO (GenVar a)
+newGenVar = newMVar
 
 -- | This pulls a new value from this var (if possible) and updates its state
 pull :: GenVar a -> IO (Maybe a)

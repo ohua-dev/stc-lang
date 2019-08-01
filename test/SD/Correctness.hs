@@ -1,4 +1,4 @@
-module SD.Correctness where
+module SD.Correctness (testSuite) where
 
 import Control.Monad.State
 

@@ -1,4 +1,4 @@
-module SD.Performance where
+module SD.Performance (testSuite) where
 
 import Test.Framework
 import Test.Framework.Providers.HUnit

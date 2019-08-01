@@ -2,10 +2,11 @@ name: stc-lang
 version: '1.0.0'
 category: Concurrency, Development
 author: Norman Rink, Sebastian Ertel, Justus Adam
-maintainer: sebastian.ertel@tu-dresden.de
+maintainer: justus.adam@tu-dresden.de
 copyright: 2017-2019 Norman Rink, Sebastian Ertel, Justus Adam
 license: BSD3
 synopsis: A library for implicit, monadic dataflow parallelism
+description: See the <https://github.com/ohua-dev/stc-lang#readme readme>
 homepage: https://github.com/ohua-dev/stc-lang#readme
 git: https://github.com/ohua-dev/stc-lang
 extra-source-files:
@@ -51,7 +52,6 @@ library:
   - Control.Monad.Stream.Chan
   - Control.Monad.Stream.Par
   - Control.Monad.Stream.PinnedChan
-  - Data.Statistics
   other-modules:
   - Control.Monad.SD.Case
   - Control.Monad.SD.Combinator
@@ -62,25 +62,8 @@ library:
   dependencies:
   - monad-par
   - monad-par-extras
-  - containers
   - abstract-par
-  - free
-  - async
-  - microlens-mtl
-  - ohua-core
-  - data-default-class
-  - OneTuple
-  - vector
-  - monad-loops
-  - stm
-  - natural-transformation
-  - split
   - bytestring
-  - abstract-par
-  - aeson
-  - bytestring
-  - foundation
-  - protolude
   - BoundedChan
   when:
   - condition: flag(debug-sched)
