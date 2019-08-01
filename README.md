@@ -1,5 +1,10 @@
 # STCLang: A library for implicit monadic dataflow parallelism
 
+[![Build Status](https://travis-ci.org/ohua-dev/stc-lang.svg?branch=master)](https://travis-ci.org/ohua-dev/stc-lang)
+[![Hackage](https://img.shields.io/hackage/v/stc-lang)](https://hackage.haskell.org/package/stc-lang)
+[![GitHub](https://img.shields.io/github/license/ohua-dev/stc-lang)](https://github.com/ohua-dev/stc-lang/blob/master/LICENSE)
+[![Publication](https://img.shields.io/badge/published-Haskell'19-informational)](#publication)
+
 STCLang is a library that enables stateful, implicit, monadic parallel
 computation in Haskell. The core ideas come from the
 [ohua](https://ohua-dev.github.io) project.
@@ -22,4 +27,5 @@ We documented the principles in this library in a paper at Haskell'2019.
 A link to the publication will appear here once we have one, e.t.a. is 22th of
 August (date of the conference). Should it be after this date now, but there's
 still no link, I probably forgot. In that case open an issue, shoot
-[me](https://github.com/JustusAdam) an email or tweet me at @justusadam_.
+[me](https://github.com/JustusAdam) an email or tweet me
+[@justusadam_](https://twitter.com/justusadam_).
