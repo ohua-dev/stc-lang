@@ -3,7 +3,7 @@
 [![Build Status](https://travis-ci.org/ohua-dev/stc-lang.svg?branch=master)](https://travis-ci.org/ohua-dev/stc-lang)
 [![Hackage](https://img.shields.io/hackage/v/stc-lang)](https://hackage.haskell.org/package/stc-lang)
 [![GitHub](https://img.shields.io/github/license/ohua-dev/stc-lang)](https://github.com/ohua-dev/stc-lang/blob/master/LICENSE)
-[![Publication](https://img.shields.io/badge/published-Haskell'19-informational)](#publication)
+[![Publication](https://img.shields.io/badge/published_paper-Haskell'19-informational)](#publication)
 
 STCLang is a library that enables stateful, implicit, monadic parallel
 computation in Haskell. The core ideas come from the
