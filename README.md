@@ -22,10 +22,7 @@ We also [published](#publication) the theory and concepts behind this library.
 
 ## Publication
 
-We documented the principles in this library in a paper at Haskell'2019.
+We documented the principles in this library in a paper at the Haskell Symposium
+2019.
 
-A link to the publication will appear here once we have one, e.t.a. is 22th of
-August (date of the conference). Should it be after this date now, but there's
-still no link, I probably forgot. In that case open an issue, shoot
-[me](https://github.com/JustusAdam) an email or tweet me
-[@justusadam_](https://twitter.com/justusadam_).
+https://doi.org/10.1145/3331545.3342600
