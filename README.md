@@ -25,4 +25,8 @@ We also [published](#publication) the theory and concepts behind this library.
 We documented the principles in this library in a paper at the Haskell Symposium
 2019.
 
-https://doi.org/10.1145/3331545.3342600
+- DOI Paper link: https://doi.org/10.1145/3331545.3342600
+- Direct link to PDF: https://ohua-dev.github.io/papers/stc-lang.pdf
+- Slides for the presentation at Haskell'19: https://ohua-dev.github.io/slides/haskell-19-stclang.pdf
+- Entry in our bibliography:
+  https://ohua-dev.github.io/bib/#stclang-state-thread-composition-as-a-foundation-for-monadic-dataflow-parallelism
