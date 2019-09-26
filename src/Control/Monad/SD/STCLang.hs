@@ -10,6 +10,7 @@ import Control.Monad.SD.Ohua
 import Control.Monad.SD.Smap
 import Data.Dynamic2
 import Data.StateElement
+import Data.Semigroup
 
 import Control.DeepSeq (NFData)
 import Control.Monad.State as S
@@ -19,10 +20,13 @@ data CollSt = CollSt
     , signals :: [IO S]
     }
 
+instance Semigroup CollSt where
+   (CollSt st1 si1) <> (CollSt st2 si2) =
+        CollSt (st1 <> st2) (si1 <> si2)
+
 instance Monoid CollSt where
     mempty = CollSt [] []
-    CollSt st1 si1 `mappend` CollSt st2 si2 =
-        CollSt (st1 `mappend` st2) (si1 `mappend` si2)
+    mappend = (<>)
 
 type STCLang a b = StateT CollSt IO (a -> OhuaM b)
 
